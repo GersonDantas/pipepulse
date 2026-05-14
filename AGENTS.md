@@ -15,10 +15,12 @@ O sistema deve:
 
 ## 🧱 Stack Tecnológica
 
-- Backend: Node.js + Express + TypeScript
-- Banco: In-memory (MVP) → PostgreSQL (futuro)
-- Fila: In-memory (MVP) → Redis + BullMQ (futuro)
-- Arquitetura: Event-driven
+- Backend: Go
+- HTTP: `net/http`
+- Concorrência: goroutines + channels
+- Banco: in-memory (MVP) → PostgreSQL (futuro)
+- Fila: in-memory com `chan` buffered (MVP) → Redis / fila distribuída (futuro)
+- Arquitetura: event-driven
 
 ---
 
@@ -26,14 +28,16 @@ O sistema deve:
 
 Fluxo principal:
 
-Webhook → Backend → Valida/Salva → Queue → Processor → Atualiza Estado → Notification Service → Mobile
+Webhook → Handler → Service → Queue → Processor → Repository → Notification
 
 ### Regras:
 
-- Backend NÃO contém lógica de negócio
+- Handler recebe a requisição HTTP e faz validação estrutural
+- Handler/Service NÃO contém lógica de negócio
 - Processor é responsável pelas decisões
 - Eventos são processados de forma assíncrona
 - Estado deve ser atualizado antes de qualquer notificação
+- Nunca processar regra de negócio diretamente no webhook
 
 ---
 
@@ -41,8 +45,8 @@ Webhook → Backend → Valida/Salva → Queue → Processor → Atualiza Estado
 
 Ordem obrigatória de processamento:
 
-1. Validar timestamp
-2. Checar duplicidade (eventId)
+1. Checar duplicidade (`eventId`)
+2. Validar timestamp
 3. Resolver conflitos (timestamp igual)
 4. Atualizar estado
 5. Disparar notificação (se relevante)
@@ -64,6 +68,9 @@ Ordem obrigatória de processamento:
 
 if (event.timestamp < current.timestamp) → IGNORA
 
+- Timestamps devem ser normalizados antes da comparação
+- Se o MVP usar string, manter formato RFC3339/UTC
+
 ---
 
 ### Conflito de timestamp
@@ -78,8 +85,9 @@ failed > success > running
 
 ### Estado
 
-- Estado do pipeline nunca pode regredir
+- O estado do pipeline nunca pode regredir
 - Sempre manter o último estado válido
+- Campos mínimos: `PipelineID`, `Status`, `Timestamp`, `LastEventID`
 
 ---
 
@@ -87,16 +95,30 @@ failed > success > running
 
 - Notificar apenas quando houver mudança relevante
 - Evitar ruído (ex: running → running sem mudança significativa)
+- Nunca notificar antes de persistir o estado
+
+---
+
+## 🧵 Concorrência em Go
+
+- A fila do MVP é um `chan models.Event`
+- O worker pool pode ser adicionado depois, sem quebrar o processamento determinístico
+- Se houver mais de um worker, usar lock por `PipelineID`
+- Não atualizar o mesmo pipeline em paralelo sem exclusão mútua
 
 ---
 
 ## 📂 Estrutura de Pastas
 
-src/
-  controllers/
+cmd/
+  api/
+    main.go
+
+internal/
+  handlers/
   services/
-  processors/
-  repositories/
+  processor/
+  repository/
   queue/
   models/
   utils/
@@ -110,6 +132,7 @@ src/
 - Nomeação clara e descritiva
 - Evitar abstração prematura no MVP
 - Evitar múltiplos bancos no início
+- Preferir fluxo direto e tipos simples
 
 ---
 
@@ -119,6 +142,7 @@ src/
 - Não adicionar complexidade desnecessária
 - Não misturar lógica de negócio com infraestrutura
 - Não criar arquitetura distribuída prematuramente
+- Não introduzir dependências pesadas sem necessidade
 
 ---
 
@@ -131,6 +155,7 @@ src/
 - Não quebrar regras de consistência (timestamp + idempotência)
 - Não sugerir soluções síncronas para processamento
 - Evitar criar arquivos desnecessários
+- Manter nomes e organização compatíveis com Go
 
 ---
 
@@ -140,23 +165,25 @@ src/
 - Não usar versionamento externo (não controlamos origem dos eventos)
 - Resolver conflitos via prioridade de status
 - Fila é usada para desacoplamento e resiliência
+- Estado persistido deve refletir apenas a última decisão válida
 
 ---
 
 ## 🚀 Evolução Futura (NÃO IMPLEMENTAR AGORA)
 
-- Redis + BullMQ para fila
+- Redis para fila distribuída
 - PostgreSQL para persistência real
 - Suporte a múltiplos usuários
 - Particionamento de filas
 - Métricas e analytics
+- Worker pool mais avançado
 
 ---
 
 ## 🧹 Otimização de Tokens
 
 - Evitar leitura de arquivos desnecessários
-- Não analisar node_modules
+- Não analisar `node_modules`
 - Não expandir logs grandes
 - Priorizar este arquivo como fonte principal
 - Ser objetivo nas respostas
@@ -166,7 +193,7 @@ src/
 ## 📌 Contexto Importante
 
 - Sistema depende de eventos externos (GitHub/GitLab)
-- Ordem de chegada dos eventos NÃO é confiável
+- Ordem de chegada dos eventos não é confiável
 - Sistema deve ser determinístico e resiliente
 - Prioridade: consistência > performance > complexidade
 
