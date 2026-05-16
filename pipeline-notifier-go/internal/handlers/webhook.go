@@ -1,28 +1,27 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/services"
 )
 
-func GithubWebhookHandler(w http.ResponseWriter, r *http.Request) {
-	var payload map[string]interface{}
+func GithubWebhookHandler(c *gin.Context) {
+	var payload models.GithubWebhookPayload
 
-	err := json.NewDecoder(r.Body).Decode(&payload)
-	if err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 		return
 	}
 
-	err = services.HandleWebhook(payload)
-	if err != nil {
+	if err := services.HandleWebhook(payload); err != nil {
 		log.Println(err)
-		http.Error(w, "error", http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	c.Status(http.StatusOK)
 }

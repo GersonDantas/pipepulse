@@ -2,18 +2,23 @@ package main
 
 import (
 	"log"
-	"net/http"
 
 	"pipeline-notifier/internal/handlers"
 	"pipeline-notifier/internal/queue"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
 	queue.StartWorker()
-	mux := http.NewServeMux()
 
-	mux.HandleFunc("/webhook/github", handlers.GithubWebhookHandler)
+	router := gin.New()
+	router.Use(gin.Logger(), gin.Recovery())
+
+	router.POST("/webhook/github", handlers.GithubWebhookHandler)
 
 	log.Println("🚀 Server running on :3000")
-	http.ListenAndServe(":3000", mux)
+	if err := router.Run(":3000"); err != nil {
+		log.Fatal(err)
+	}
 }
