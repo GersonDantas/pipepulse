@@ -6,6 +6,10 @@ import (
 	"pipeline-notifier/internal/repository"
 )
 
+var notifyFn = func(event models.Event) {
+	fmt.Println("🔔 Notificação:", event.Status)
+}
+
 func ProcessEvent(event models.Event) {
 	current := repository.GetState(event.PipelineID)
 
@@ -38,7 +42,9 @@ func ProcessEvent(event models.Event) {
 
 	fmt.Println("✅ Estado atualizado:", event.Status)
 
-	notify(event)
+	if shouldNotify(current, event) {
+		notify(event)
+	}
 }
 
 func getPriority(status string) int {
@@ -54,6 +60,14 @@ func getPriority(status string) int {
 	}
 }
 
+func shouldNotify(current *repository.State, event models.Event) bool {
+	if current == nil {
+		return true
+	}
+
+	return current.Status != event.Status
+}
+
 func notify(event models.Event) {
-	fmt.Println("🔔 Notificação:", event.Status)
+	notifyFn(event)
 }
