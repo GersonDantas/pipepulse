@@ -19,3 +19,7 @@ func GetState(id string) *State {
 func SaveState(s State) {
 	db[s.PipelineID] = s
 }
+
+func Reset() {
+	db = make(map[string]State)
+}
