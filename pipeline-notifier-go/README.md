@@ -2,6 +2,8 @@
 
 Backend em Go para receber eventos de pipelines via webhook, processar esses eventos de forma assincrona e manter um estado consistente mesmo quando eventos chegam duplicados ou fora de ordem.
 
+Camada HTTP do MVP: `gin`.
+
 ## Objetivo
 
 O projeto implementa um MVP de monitoramento de pipelines com foco em consistencia de estado.
@@ -20,7 +22,7 @@ Responsabilidades:
 
 | Camada | Papel |
 | --- | --- |
-| Handler | Recebe a requisicao HTTP e valida o payload |
+| Handler | Recebe a requisicao HTTP com Gin e valida o payload |
 | Service | Converte o webhook externo em evento interno |
 | Queue | Desacopla entrada HTTP do processamento |
 | Processor | Aplica regras de negocio |
@@ -119,6 +121,7 @@ go test ./...
 ## Estado Atual do MVP
 
 - API HTTP para webhook do GitHub.
+- Roteamento e binding HTTP com Gin.
 - Fila in-memory com channel buffered.
 - Worker assincrono com goroutine.
 - Repository in-memory.

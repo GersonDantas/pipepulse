@@ -16,7 +16,7 @@ O sistema deve:
 ## 🧱 Stack Tecnológica
 
 - Backend: Go
-- HTTP: `net/http`
+- HTTP Framework: `gin`
 - Concorrência: goroutines + channels
 - Banco: in-memory (MVP) → PostgreSQL (futuro)
 - Fila: in-memory com `chan` buffered (MVP) → Redis / fila distribuída (futuro)
@@ -33,6 +33,7 @@ Webhook → Handler → Service → Queue → Processor → Repository → Notif
 ### Regras:
 
 - Handler recebe a requisição HTTP e faz validação estrutural
+- Handler usa `gin.Context` apenas como adaptador HTTP
 - Handler/Service NÃO contém lógica de negócio
 - Processor é responsável pelas decisões
 - Eventos são processados de forma assíncrona

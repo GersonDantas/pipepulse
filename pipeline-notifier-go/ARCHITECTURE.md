@@ -2,6 +2,8 @@
 
 Guia de arquitetura e implementacao do MVP.
 
+Framework HTTP do MVP: `gin`.
+
 ## Objetivo
 
 Construir um backend capaz de receber eventos de pipelines, processar esses eventos de forma assincrona e manter um estado consistente mesmo quando os eventos chegam duplicados ou fora de ordem.
@@ -20,7 +22,7 @@ Responsabilidades:
 
 | Camada | Responsabilidade |
 | --- | --- |
-| Handler | Recebe a requisicao HTTP e valida a estrutura de entrada |
+| Handler | Recebe a requisicao HTTP com Gin e valida a estrutura de entrada |
 | Service | Converte o payload externo em um evento interno |
 | Queue | Desacopla a entrada HTTP do processamento |
 | Processor | Aplica regras de negocio e decide se o estado muda |
@@ -34,6 +36,8 @@ Responsabilidades:
 O webhook nao processa regra de negocio diretamente. Ele recebe um evento externo, transforma esse dado em um evento interno e coloca esse evento em uma fila.
 
 O processamento acontece depois, de forma assincrona, no processor.
+
+No MVP atual, o adaptador HTTP e implementado com Gin, mas a regra continua a mesma: o handler apenas valida e encaminha.
 
 ### Desacoplamento
 
