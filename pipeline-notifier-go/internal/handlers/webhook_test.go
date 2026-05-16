@@ -40,6 +40,17 @@ func TestGithubWebhookHandler(t *testing.T) {
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name: "invalid timestamp",
+			body: `{
+				"workflow_run": {
+					"id": 123,
+					"conclusion": "success",
+					"updated_at": "16-05-2026 12:00:00"
+				}
+			}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {

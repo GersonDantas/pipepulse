@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 	"net/http"
 
@@ -19,6 +20,12 @@ func GithubWebhookHandler(c *gin.Context) {
 
 	if err := services.HandleWebhook(payload); err != nil {
 		log.Println(err)
+
+		if errors.Is(err, services.ErrInvalidTimestamp) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid timestamp"})
+			return
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
 		return
 	}
