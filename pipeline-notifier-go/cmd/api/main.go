@@ -16,6 +16,7 @@ func main() {
 	router.Use(gin.Logger(), gin.Recovery())
 
 	router.POST("/webhook/github", handlers.GithubWebhookHandler)
+	router.GET("/pipelines/:id", handlers.GetPipelineStateHandler)
 
 	log.Println("🚀 Server running on :3000")
 	if err := router.Run(":3000"); err != nil {
