@@ -27,7 +27,7 @@ func ProcessEvent(event models.Event) {
 
 	// ⚖️ Prioridade
 	if current != nil && event.Timestamp == current.Timestamp {
-		if getPriority(event.Status) <= getPriority(current.Status) {
+		if event.Status.Priority() <= current.Status.Priority() {
 			fmt.Println("⚖️ Prioridade menor")
 			return
 		}
@@ -44,19 +44,6 @@ func ProcessEvent(event models.Event) {
 
 	if shouldNotify(current, event) {
 		notify(event)
-	}
-}
-
-func getPriority(status string) int {
-	switch status {
-	case "failed":
-		return 3
-	case "success":
-		return 2
-	case "running":
-		return 1
-	default:
-		return 0
 	}
 }
 

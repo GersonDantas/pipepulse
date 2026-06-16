@@ -10,6 +10,7 @@ import (
 )
 
 var ErrInvalidTimestamp = errors.New("invalid timestamp")
+var ErrInvalidStatus = errors.New("invalid status")
 
 var enqueueFn = queue.Enqueue
 
@@ -21,10 +22,15 @@ func HandleWebhook(payload models.GithubWebhookPayload) error {
 		return fmt.Errorf("%w: %v", ErrInvalidTimestamp, err)
 	}
 
+	status, ok := getStatus(payload.WorkflowRun)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrInvalidStatus, *payload.WorkflowRun.Conclusion)
+	}
+
 	event := models.Event{
 		EventID:    fmt.Sprintf("%d", payload.WorkflowRun.ID),
 		PipelineID: fmt.Sprintf("%d", payload.WorkflowRun.ID),
-		Status:     getStatus(payload.WorkflowRun),
+		Status:     status,
 		Timestamp:  timestamp,
 	}
 
@@ -35,11 +41,12 @@ func HandleWebhook(payload models.GithubWebhookPayload) error {
 	return nil
 }
 
-func getStatus(wr models.GithubWorkflowRun) string {
+func getStatus(wr models.GithubWorkflowRun) (models.PipelineStatus, bool) {
 	if wr.Conclusion == nil || *wr.Conclusion == "" {
-		return "running"
+		return models.PipelineStatusRunning, true
 	}
-	return *wr.Conclusion
+
+	return models.NewPipelineStatus(*wr.Conclusion)
 }
 
 func normalizeTimestamp(value string) (string, error) {

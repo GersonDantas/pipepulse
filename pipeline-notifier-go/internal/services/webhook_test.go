@@ -91,3 +91,24 @@ func TestHandleWebhookReturnsInvalidTimestampError(t *testing.T) {
 		t.Fatalf("error = %v, want ErrInvalidTimestamp", err)
 	}
 }
+
+func TestHandleWebhookReturnsInvalidStatusError(t *testing.T) {
+	captureEnqueuedEvent(t)
+	conclusion := "failled"
+
+	payload := models.GithubWebhookPayload{
+		WorkflowRun: models.GithubWorkflowRun{
+			ID:         123,
+			Conclusion: &conclusion,
+			UpdatedAt:  "2026-05-16T12:00:00Z",
+		},
+	}
+
+	err := HandleWebhook(payload)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("error = %v, want ErrInvalidStatus", err)
+	}
+}

@@ -28,11 +28,19 @@ func GithubWebhookHandler(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, services.ErrInvalidStatus) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error":   "invalid status",
+				"allowed": []string{"failed", "success", "running"},
+			})
+			return
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
 		return
 	}
 
-	c.Status(http.StatusOK)
+	c.Status(http.StatusAccepted)
 }
 
 func GetPipelineStateHandler(c *gin.Context) {

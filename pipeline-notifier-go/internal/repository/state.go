@@ -1,8 +1,10 @@
 package repository
 
+import "pipeline-notifier/internal/models"
+
 type State struct {
 	PipelineID  string
-	Status      string
+	Status      models.PipelineStatus
 	Timestamp   string
 	LastEventID string
 }

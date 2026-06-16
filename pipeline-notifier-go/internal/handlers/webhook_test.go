@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"pipeline-notifier/internal/queue"
+	"pipeline-notifier/internal/repository"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestGithubWebhookHandler(t *testing.T) {
@@ -28,7 +30,7 @@ func TestGithubWebhookHandler(t *testing.T) {
 					"updated_at": "2026-05-16T12:00:00Z"
 				}
 			}`,
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusAccepted,
 		},
 		{
 			name:       "invalid json",
@@ -62,6 +64,17 @@ func TestGithubWebhookHandler(t *testing.T) {
 			}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name: "invalid status",
+			body: `{
+				"workflow_run": {
+					"id": 123,
+					"conclusion": "cancelled",
+					"updated_at": "2026-05-16T12:00:00Z"
+				}
+			}`,
+			wantStatus: http.StatusUnprocessableEntity,
+		},
 	}
 
 	for _, tt := range tests {
@@ -79,5 +92,46 @@ func TestGithubWebhookHandler(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestGetPipelineStateHandlerReturnsState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository.Reset()
+
+	repository.SaveState(repository.State{
+		PipelineID:  "123",
+		Status:      "failed",
+		Timestamp:   "2026-05-16T15:00:00.000000000Z",
+		LastEventID: "123",
+	})
+
+	router := gin.New()
+	router.GET("/pipelines/:id", GetPipelineStateHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/pipelines/123", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestGetPipelineStateHandlerReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository.Reset()
+
+	router := gin.New()
+	router.GET("/pipelines/:id", GetPipelineStateHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/pipelines/999", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
