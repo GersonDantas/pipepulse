@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/queue"
 	"pipeline-notifier/internal/repository"
 
@@ -116,6 +118,33 @@ func TestGetPipelineStateHandlerReturnsState(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var body struct {
+		PipelineID  string                `json:"pipeline_id"`
+		Status      models.PipelineStatus `json:"status"`
+		Timestamp   string                `json:"timestamp"`
+		LastEventID string                `json:"last_event_id"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Response body is not valid: %v", err)
+	}
+
+	if body.PipelineID != "123" {
+		t.Fatalf("pipeline_id = %q, want %q", body.PipelineID, "123")
+	}
+
+	if body.Timestamp != "2026-05-16T15:00:00.000000000Z" {
+		t.Fatalf("timestamp = %q, want %q", body.Timestamp, "2026-05-16T15:00:00.000000000Z")
+	}
+
+	if body.Status != models.PipelineStatusFailed {
+		t.Fatalf("status = %q, want %q", body.Status, "failed")
+	}
+
+	if body.LastEventID != "123" {
+		t.Fatalf("last_event_id = %q, want %q", body.LastEventID, "123")
 	}
 }
 

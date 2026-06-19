@@ -3,10 +3,10 @@ package repository
 import "pipeline-notifier/internal/models"
 
 type State struct {
-	PipelineID  string
-	Status      models.PipelineStatus
-	Timestamp   string
-	LastEventID string
+	PipelineID  string                `json:"pipeline_id"`
+	Status      models.PipelineStatus `json:"status"`
+	Timestamp   string                `json:"timestamp"`
+	LastEventID string                `json:"last_event_id"`
 }
 
 var db = make(map[string]State)
