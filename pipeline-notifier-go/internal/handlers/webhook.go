@@ -54,3 +54,7 @@ func GetPipelineStateHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, state)
 }
+
+func HealthCheckHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}

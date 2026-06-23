@@ -164,3 +164,31 @@ func TestGetPipelineStateHandlerReturnsNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
+
+func TestHealthCheckHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.GET("/health", HealthCheckHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := struct {
+		Status string `json:"status"`
+	}{}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), `{"status":"ok"}`)
+	}
+
+	if body.Status != "ok" {
+		t.Fatalf("status = %q, want %q", body.Status, "ok")
+	}
+}

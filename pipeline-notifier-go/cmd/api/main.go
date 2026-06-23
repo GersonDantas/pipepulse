@@ -15,6 +15,7 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
 
+	router.GET("/health", handlers.HealthCheckHandler)
 	router.POST("/webhook/github", handlers.GithubWebhookHandler)
 	router.GET("/pipelines/:id", handlers.GetPipelineStateHandler)
 

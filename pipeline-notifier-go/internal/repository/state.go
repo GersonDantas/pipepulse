@@ -1,6 +1,9 @@
 package repository
 
-import "pipeline-notifier/internal/models"
+import (
+	"pipeline-notifier/internal/models"
+	"sync"
+)
 
 type State struct {
 	PipelineID  string                `json:"pipeline_id"`
@@ -10,8 +13,12 @@ type State struct {
 }
 
 var db = make(map[string]State)
+var mu = sync.RWMutex{}
 
 func GetState(id string) *State {
+	mu.RLock()
+	defer mu.RUnlock()
+
 	if val, ok := db[id]; ok {
 		return &val
 	}
@@ -19,9 +26,15 @@ func GetState(id string) *State {
 }
 
 func SaveState(s State) {
+	mu.Lock()
+	defer mu.Unlock()
+
 	db[s.PipelineID] = s
 }
 
 func Reset() {
+	mu.Lock()
+	defer mu.Unlock()
+
 	db = make(map[string]State)
 }
