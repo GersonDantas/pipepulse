@@ -14,6 +14,11 @@ import (
 
 func GithubWebhookHandler(c *gin.Context) {
 	var payload models.GithubWebhookPayload
+	signature := c.GetHeader("X-Hub-Signature-256")
+	if signature == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing signature"})
+		return
+	}
 
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})

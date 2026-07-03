@@ -86,6 +86,7 @@ func TestGithubWebhookHandler(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Hub-Signature-256", "sha256=test")
 
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
@@ -94,6 +95,31 @@ func TestGithubWebhookHandler(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestGithubWebhookHandlerWithoutSignatureReturnsUnauthorized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.POST("/webhook/github", GithubWebhookHandler)
+
+	body := `{
+		"workflow_run": {
+			"id": 123,
+			"conclusion": "success",
+			"updated_at": "2026-05-16T12:00:00Z"
+		}
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
