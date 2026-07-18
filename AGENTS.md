@@ -1,8 +1,16 @@
 # 📘 AGENTS.md
 
+## 📍 Fonte central obrigatória
+
+Antes de implementar, revisar ou testar qualquer parte do MVP, leia `pipeline-notifier-go/RELATORIO_MVP.md` por completo.
+
+Esse relatório é a fonte de verdade para decisões de produto, monetização, arquitetura alvo, escopo, TDD, branches, Pull Requests, testes e aceite. Este arquivo complementa o relatório com invariantes de engenharia. Quando houver conflito entre os dois, `pipeline-notifier-go/RELATORIO_MVP.md` prevalece para o MVP público.
+
+Qualquer mudança de escopo ou arquitetura deve atualizar primeiro o plano central.
+
 ## 🎯 Objetivo do Projeto
 
-Sistema para monitoramento de pipelines (GitHub/GitLab) em tempo real via webhooks, com processamento assíncrono orientado a eventos.
+Sistema privado para monitoramento de pipelines GitHub em tempo real via webhooks, com processamento assíncrono orientado a eventos. GitLab permanece como evolução futura.
 
 O sistema deve:
 
@@ -18,8 +26,9 @@ O sistema deve:
 - Backend: Go
 - HTTP Framework: `gin`
 - Concorrência: goroutines + channels
-- Banco: in-memory (MVP) → PostgreSQL (futuro)
-- Fila: in-memory com `chan` buffered (MVP) → Redis / fila distribuída (futuro)
+- Banco: in-memory no protótipo atual → PostgreSQL no MVP público
+- Fila: PostgreSQL como fonte durável + `chan` como sinal de despertar
+- Aplicativo: Flutter/Dart para Android, mantendo o build iOS funcional
 - Arquitetura: event-driven
 
 ---
@@ -28,7 +37,7 @@ O sistema deve:
 
 Fluxo principal:
 
-Webhook → Handler → Service → Queue → Processor → Repository → Notification
+Webhook → Handler → Persistência da entrega → Sinal → Processor → Estado/Falha/Outbox → Notification
 
 ### Regras:
 
@@ -37,6 +46,7 @@ Webhook → Handler → Service → Queue → Processor → Repository → Notif
 - Handler/Service NÃO contém lógica de negócio
 - Processor é responsável pelas decisões
 - Eventos são processados de forma assíncrona
+- A entrega válida deve ser persistida antes da resposta `202`
 - Estado deve ser atualizado antes de qualquer notificação
 - Nunca processar regra de negócio diretamente no webhook
 
@@ -46,11 +56,13 @@ Webhook → Handler → Service → Queue → Processor → Repository → Notif
 
 Ordem obrigatória de processamento:
 
-1. Checar duplicidade (`eventId`)
+1. Checar duplicidade (`X-GitHub-Delivery`)
 2. Validar timestamp
 3. Resolver conflitos (timestamp igual)
 4. Atualizar estado
-5. Disparar notificação (se relevante)
+5. Criar falha única por run e tentativa
+6. Criar outbox de notificação (se relevante)
+7. Marcar a entrega como processada
 
 ---
 
@@ -58,7 +70,7 @@ Ordem obrigatória de processamento:
 
 ### Idempotência
 
-- Cada evento possui um `eventId`
+- Cada evento possui um `DeliveryID`, originado de `X-GitHub-Delivery`
 - Eventos duplicados devem ser ignorados
 
 ---
@@ -80,7 +92,7 @@ Se timestamps forem iguais:
 
 - Aplicar prioridade de status:
 
-failed > success > running
+failed > success > cancelled > running
 
 ---
 
@@ -88,24 +100,24 @@ failed > success > running
 
 - O estado do pipeline nunca pode regredir
 - Sempre manter o último estado válido
-- Campos mínimos: `PipelineID`, `Status`, `Timestamp`, `LastEventID`
+- Identificar no mínimo repositório, workflow, run, tentativa, status, conclusão, timestamp e última entrega
 
 ---
 
 ### Notificações
 
-- Notificar apenas quando houver mudança relevante
-- Evitar ruído (ex: running → running sem mudança significativa)
-- Nunca notificar antes de persistir o estado
+- Notificar uma vez por falha relevante, workflow run, tentativa e dispositivo
+- Runs distintos com falha geram notificações distintas, mesmo quando o estado anterior já era `failed`
+- Estado, falha e outbox devem ser persistidos antes de qualquer tentativa de push
 
 ---
 
 ## 🧵 Concorrência em Go
 
-- A fila do MVP é um `chan models.Event`
-- O worker pool pode ser adicionado depois, sem quebrar o processamento determinístico
-- Se houver mais de um worker, usar lock por `PipelineID`
-- Não atualizar o mesmo pipeline em paralelo sem exclusão mútua
+- O protótipo atual usa `chan models.Event`; no MVP, o channel será apenas um sinal de despertar
+- PostgreSQL preserva entregas pendentes quando o processo reinicia ou um sinal é perdido
+- Usar um processor por instância no MVP
+- Se houver mais de um worker no futuro, usar exclusão mútua por workflow
 
 ---
 
@@ -140,6 +152,7 @@ internal/
 ## ⚠️ Restrições
 
 - Não usar múltiplas filas no MVP
+- Não introduzir Redis ou broker externo no MVP
 - Não adicionar complexidade desnecessária
 - Não misturar lógica de negócio com infraestrutura
 - Não criar arquitetura distribuída prematuramente
@@ -149,14 +162,19 @@ internal/
 
 ## 🧠 Diretrizes para IA
 
+- Ler `pipeline-notifier-go/RELATORIO_MVP.md` antes de qualquer ação do MVP
 - Sempre seguir arquitetura orientada a eventos
 - Nunca processar lógica diretamente no webhook
-- Sempre manter fluxo: webhook → fila → processor
+- Sempre persistir a entrega antes de sinalizar o processor
 - Priorizar simplicidade
 - Não quebrar regras de consistência (timestamp + idempotência)
 - Não sugerir soluções síncronas para processamento
 - Evitar criar arquivos desnecessários
 - Manter nomes e organização compatíveis com Go
+- Executar toda criação ou alteração de comportamento em ciclos TDD `Red, Green, Refactor`
+- Criar e fazer checkout de uma branch adequada antes de editar uma nova fase
+- Produzir o relatório obrigatório de cada PR, com commits, mudanças, evidências TDD e roteiro de testes do usuário
+- Parar após cada PR para revisão e aprovação explícita; não fazer merge automático nem iniciar fase dependente
 
 ---
 
@@ -165,7 +183,7 @@ internal/
 - Timestamp é usado como fonte de verdade temporal
 - Não usar versionamento externo (não controlamos origem dos eventos)
 - Resolver conflitos via prioridade de status
-- Fila é usada para desacoplamento e resiliência
+- PostgreSQL garante durabilidade; o channel desacopla e desperta o processamento
 - Estado persistido deve refletir apenas a última decisão válida
 
 ---
@@ -173,8 +191,11 @@ internal/
 ## 🚀 Evolução Futura (NÃO IMPLEMENTAR AGORA)
 
 - Redis para fila distribuída
-- PostgreSQL para persistência real
-- Suporte a múltiplos usuários
+- GitLab
+- Equipes, membros e permissões
+- Publicação iOS
+- Assinaturas Pro e billing
+- Patrocínio e anúncios após validação
 - Particionamento de filas
 - Métricas e analytics
 - Worker pool mais avançado
@@ -186,17 +207,18 @@ internal/
 - Evitar leitura de arquivos desnecessários
 - Não analisar `node_modules`
 - Não expandir logs grandes
-- Priorizar este arquivo como fonte principal
+- Priorizar `pipeline-notifier-go/RELATORIO_MVP.md` como fonte central
+- Usar este arquivo para invariantes complementares
 - Ser objetivo nas respostas
 
 ---
 
 ## 📌 Contexto Importante
 
-- Sistema depende de eventos externos (GitHub/GitLab)
+- O MVP depende de eventos externos do GitHub
 - Ordem de chegada dos eventos não é confiável
 - Sistema deve ser determinístico e resiliente
-- Prioridade: consistência > performance > complexidade
+- Prioridade: consistência > confiabilidade > segurança > simplicidade > performance
 
 ---
 
