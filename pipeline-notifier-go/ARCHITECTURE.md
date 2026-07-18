@@ -1,6 +1,8 @@
 # Pipeline Notifier em Go
 
-Guia de arquitetura e implementacao do MVP.
+> Estado: este arquivo documenta a arquitetura do prototipo atual em memoria. O plano central e a arquitetura alvo do MVP estao em [`RELATORIO_MVP.md`](./RELATORIO_MVP.md), que prevalece em caso de conflito.
+
+Guia de arquitetura e implementacao do prototipo inicial.
 
 Framework HTTP do MVP: `gin`.
 

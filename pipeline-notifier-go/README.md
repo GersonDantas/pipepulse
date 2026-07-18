@@ -1,5 +1,7 @@
 # Pipeline Notifier
 
+> Estado: este README descreve como executar o prototipo atual. Consulte [`RELATORIO_MVP.md`](./RELATORIO_MVP.md) para o plano central, o produto Flutter, a arquitetura alvo, as fases, o TDD e o processo obrigatorio de cada PR.
+
 Backend em Go para receber eventos de pipelines via webhook, processar esses eventos de forma assincrona e manter um estado consistente mesmo quando eventos chegam duplicados ou fora de ordem.
 
 Camada HTTP do MVP: `gin`.
