@@ -45,7 +45,7 @@ Estados permitidos:
 | Fase | Entrega | Estado | Branch | PR | Dependência para avançar |
 | ---: | --- | --- | --- | --- | --- |
 | 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
-| 1 | Fundação Go | em andamento | `feat/mvp-backend-foundation` | não aberto | abrir PR, entregar relatório e obter aprovação do usuário |
+| 1 | Fundação Go | em revisão | `feat/mvp-backend-foundation` | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | revisão e aprovação explícita do usuário |
 | 2 | PostgreSQL e persistência durável | pendente | `feat/mvp-postgres` | não aberto | Fase 1 aprovada |
 | 3 | Webhook GitHub vertical | pendente | `feat/mvp-github-webhook` | não aberto | Fase 2 aprovada |
 | 4 | Autenticação e API do produto | pendente | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
@@ -64,7 +64,7 @@ Atualizar uma linha ao abrir, revisar, aprovar ou rejeitar cada PR. O relatório
 | Fase | PR | Branch | Estado | Commits | Testes | Aprovação do usuário | Observações |
 | ---: | --- | --- | --- | ---: | --- | --- | --- |
 | 0 | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | `docs/mvp-central-plan` | aprovada | 3 | `git diff --check`, `go test ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário | plano central criado, documentos antigos alinhados e Fase 1 liberada |
-| 1 | não aberto | `feat/mvp-backend-foundation` | em andamento | 2 | `go test ./...`, `go test -race ./...` e `go vet ./...` verdes | pendente | configuração, composição explícita, evento GitHub normalizado e desligamento gracioso implementados |
+| 1 | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | `feat/mvp-backend-foundation` | em revisão | 4 | `go test ./...`, `go test -race ./...` e `go vet ./...` verdes | pendente | configuração, composição explícita, evento GitHub normalizado, fila drenável e relatório de revisão entregues |
 
 Nenhuma linha pode ser marcada como `aprovada` sem a confirmação explícita do usuário. Quando um PR for reprovado ou exigir correções, manter o mesmo registro e anotar a nova rodada de testes.
 
