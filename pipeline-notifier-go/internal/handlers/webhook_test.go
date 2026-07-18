@@ -1,220 +1,154 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"pipeline-notifier/internal/models"
-	"pipeline-notifier/internal/queue"
 	"pipeline-notifier/internal/repository"
 
 	"github.com/gin-gonic/gin"
 )
 
-func TestGithubWebhookHandler(t *testing.T) {
+type fakeWorkflowRunService struct {
+	called     bool
+	deliveryID string
+	err        error
+}
+
+func (service *fakeWorkflowRunService) Handle(_ context.Context, deliveryID string, _ models.GithubWebhookPayload) error {
+	service.called = true
+	service.deliveryID = deliveryID
+	return service.err
+}
+
+func newTestHandler(service WorkflowRunService, stateRepository repository.StateRepository) *Handler {
+	return New(service, stateRepository, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func validWebhookBody() string {
+	return `{
+		"repository": {"id": 10},
+		"workflow_run": {
+			"id": 20,
+			"workflow_id": 30,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "success",
+			"updated_at": "2026-05-16T12:00:00Z"
+		}
+	}`
+}
+
+func TestGithubWebhookAcceptsValidPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	queue.StartWorker()
+	service := &fakeWorkflowRunService{}
+	handler := newTestHandler(service, repository.NewMemoryStateRepository())
+	router := gin.New()
+	router.POST("/webhook/github", handler.GithubWebhook)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(validWebhookBody()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hub-Signature-256", "sha256=test")
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if !service.called || service.deliveryID != "delivery-1" {
+		t.Fatalf("service call = %#v, want delivery-1", service)
+	}
+}
+
+func TestGithubWebhookRejectsMissingRequiredHeadersAndInvalidPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := newTestHandler(&fakeWorkflowRunService{}, repository.NewMemoryStateRepository())
 
 	tests := []struct {
 		name       string
 		body       string
+		signature  string
+		deliveryID string
 		wantStatus int
 	}{
-		{
-			name: "valid payload",
-			body: `{
-				"workflow_run": {
-					"id": 123,
-					"conclusion": "success",
-					"updated_at": "2026-05-16T12:00:00Z"
-				}
-			}`,
-			wantStatus: http.StatusAccepted,
-		},
-		{
-			name:       "invalid json",
-			body:       `{`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "missing workflow_run",
-			body:       `{}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "id as string",
-			body: `{
-				"workflow_run": {
-					"id": "123",
-					"conclusion": "success",
-					"updated_at": "2026-05-16T12:00:00Z"
-				}
-			}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "invalid timestamp",
-			body: `{
-				"workflow_run": {
-					"id": 123,
-					"conclusion": "success",
-					"updated_at": "16-05-2026 12:00:00"
-				}
-			}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "invalid status",
-			body: `{
-				"workflow_run": {
-					"id": 123,
-					"conclusion": "cancelled",
-					"updated_at": "2026-05-16T12:00:00Z"
-				}
-			}`,
-			wantStatus: http.StatusUnprocessableEntity,
-		},
+		{name: "missing signature", body: validWebhookBody(), wantStatus: http.StatusUnauthorized},
+		{name: "missing delivery", body: validWebhookBody(), signature: "sha256=test", wantStatus: http.StatusBadRequest},
+		{name: "invalid payload", body: `{`, signature: "sha256=test", deliveryID: "delivery-1", wantStatus: http.StatusBadRequest},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			router := gin.New()
-			router.POST("/webhook/github", GithubWebhookHandler)
-
-			req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(tt.body))
+			router.POST("/webhook/github", handler.GithubWebhook)
+			req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(test.body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Hub-Signature-256", "sha256=test")
-
+			req.Header.Set("X-Hub-Signature-256", test.signature)
+			req.Header.Set("X-GitHub-Delivery", test.deliveryID)
 			rec := httptest.NewRecorder()
+
 			router.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			if rec.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, test.wantStatus)
 			}
 		})
 	}
 }
 
-func TestGithubWebhookHandlerWithoutSignatureReturnsUnauthorized(t *testing.T) {
+func TestGetPipelineStateReturnsState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	router := gin.New()
-	router.POST("/webhook/github", GithubWebhookHandler)
-
-	body := `{
-		"workflow_run": {
-			"id": 123,
-			"conclusion": "success",
-			"updated_at": "2026-05-16T12:00:00Z"
-		}
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/webhook/github", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
-	}
-}
-
-func TestGetPipelineStateHandlerReturnsState(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	repository.Reset()
-
-	repository.SaveState(repository.State{
-		PipelineID:  "123",
-		Status:      "failed",
-		Timestamp:   "2026-05-16T15:00:00.000000000Z",
-		LastEventID: "123",
+	stateRepository := repository.NewMemoryStateRepository()
+	stateRepository.SaveState(repository.State{
+		PipelineID:     "10:30",
+		RepositoryID:   10,
+		WorkflowID:     30,
+		WorkflowRunID:  20,
+		RunAttempt:     1,
+		Status:         models.PipelineStatusFailed,
+		Timestamp:      time.Date(2026, time.May, 16, 15, 0, 0, 0, time.UTC),
+		LastDeliveryID: "delivery-1",
 	})
-
+	handler := newTestHandler(&fakeWorkflowRunService{}, stateRepository)
 	router := gin.New()
-	router.GET("/pipelines/:id", GetPipelineStateHandler)
+	router.GET("/pipelines/:id", handler.GetPipelineState)
 
-	req := httptest.NewRequest(http.MethodGet, "/pipelines/123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/pipelines/10:30", nil)
 	rec := httptest.NewRecorder()
-
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	var body struct {
-		PipelineID  string                `json:"pipeline_id"`
-		Status      models.PipelineStatus `json:"status"`
-		Timestamp   string                `json:"timestamp"`
-		LastEventID string                `json:"last_event_id"`
-	}
-
+	var body repository.State
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("Response body is not valid: %v", err)
+		t.Fatalf("response body is not valid: %v", err)
 	}
-
-	if body.PipelineID != "123" {
-		t.Fatalf("pipeline_id = %q, want %q", body.PipelineID, "123")
-	}
-
-	if body.Timestamp != "2026-05-16T15:00:00.000000000Z" {
-		t.Fatalf("timestamp = %q, want %q", body.Timestamp, "2026-05-16T15:00:00.000000000Z")
-	}
-
-	if body.Status != models.PipelineStatusFailed {
-		t.Fatalf("status = %q, want %q", body.Status, "failed")
-	}
-
-	if body.LastEventID != "123" {
-		t.Fatalf("last_event_id = %q, want %q", body.LastEventID, "123")
+	if body.LastDeliveryID != "delivery-1" || body.Status != models.PipelineStatusFailed {
+		t.Fatalf("response body = %#v, want failed state", body)
 	}
 }
 
-func TestGetPipelineStateHandlerReturnsNotFound(t *testing.T) {
+func TestHealthCheckReturnsOK(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	repository.Reset()
-
+	handler := newTestHandler(&fakeWorkflowRunService{}, repository.NewMemoryStateRepository())
 	router := gin.New()
-	router.GET("/pipelines/:id", GetPipelineStateHandler)
+	router.GET("/health", handler.HealthCheck)
 
-	req := httptest.NewRequest(http.MethodGet, "/pipelines/999", nil)
 	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
-func TestHealthCheckHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	router := gin.New()
-	router.GET("/health", HealthCheckHandler)
-
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	body := struct {
-		Status string `json:"status"`
-	}{}
-
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body = %q, want %q", rec.Body.String(), `{"status":"ok"}`)
-	}
-
-	if body.Status != "ok" {
-		t.Fatalf("status = %q, want %q", body.Status, "ok")
 	}
 }

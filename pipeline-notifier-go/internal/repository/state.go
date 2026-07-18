@@ -1,40 +1,51 @@
 package repository
 
 import (
-	"pipeline-notifier/internal/models"
 	"sync"
+	"time"
+
+	"pipeline-notifier/internal/models"
 )
 
 type State struct {
-	PipelineID  string                `json:"pipeline_id"`
-	Status      models.PipelineStatus `json:"status"`
-	Timestamp   string                `json:"timestamp"`
-	LastEventID string                `json:"last_event_id"`
+	PipelineID     string                `json:"pipeline_id"`
+	RepositoryID   int64                 `json:"repository_id"`
+	WorkflowID     int64                 `json:"workflow_id"`
+	WorkflowRunID  int64                 `json:"workflow_run_id"`
+	RunAttempt     int                   `json:"run_attempt"`
+	Status         models.PipelineStatus `json:"status"`
+	Timestamp      time.Time             `json:"timestamp"`
+	LastDeliveryID string                `json:"last_delivery_id"`
 }
 
-var db = make(map[string]State)
-var mu = sync.RWMutex{}
+type StateRepository interface {
+	GetState(pipelineID string) *State
+	SaveState(state State)
+}
 
-func GetState(id string) *State {
-	mu.RLock()
-	defer mu.RUnlock()
+type MemoryStateRepository struct {
+	states map[string]State
+	mu     sync.RWMutex
+}
 
-	if val, ok := db[id]; ok {
-		return &val
+func NewMemoryStateRepository() *MemoryStateRepository {
+	return &MemoryStateRepository{states: make(map[string]State)}
+}
+
+func (repository *MemoryStateRepository) GetState(pipelineID string) *State {
+	repository.mu.RLock()
+	defer repository.mu.RUnlock()
+
+	state, ok := repository.states[pipelineID]
+	if !ok {
+		return nil
 	}
-	return nil
+	return &state
 }
 
-func SaveState(s State) {
-	mu.Lock()
-	defer mu.Unlock()
+func (repository *MemoryStateRepository) SaveState(state State) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
 
-	db[s.PipelineID] = s
-}
-
-func Reset() {
-	mu.Lock()
-	defer mu.Unlock()
-
-	db = make(map[string]State)
+	repository.states[state.PipelineID] = state
 }

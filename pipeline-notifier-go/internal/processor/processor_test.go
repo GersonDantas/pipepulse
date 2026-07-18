@@ -1,228 +1,98 @@
 package processor
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"testing"
+	"time"
 
 	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/repository"
 )
 
-func captureNotifications(t *testing.T) *[]models.Event {
-	t.Helper()
-
-	original := notifyFn
-	notifications := make([]models.Event, 0)
-
-	notifyFn = func(event models.Event) {
-		notifications = append(notifications, event)
-	}
-
-	t.Cleanup(func() {
-		notifyFn = original
-	})
-
-	return &notifications
+type fakeNotifier struct {
+	events []models.Event
 }
 
-func TestProcessEventSavesNewPipelineState(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
+func (notifier *fakeNotifier) Notify(_ context.Context, event models.Event) error {
+	notifier.events = append(notifier.events, event)
+	return nil
+}
 
-	event := models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T10:00:00Z",
+func newTestProcessor() (*Processor, *repository.MemoryStateRepository, *fakeNotifier) {
+	stateRepository := repository.NewMemoryStateRepository()
+	notifier := &fakeNotifier{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return New(stateRepository, notifier, logger), stateRepository, notifier
+}
+
+func workflowEvent(deliveryID string, status models.PipelineStatus, timestamp time.Time) models.Event {
+	return models.Event{
+		DeliveryID:    deliveryID,
+		RepositoryID:  10,
+		WorkflowID:    20,
+		WorkflowRunID: 30,
+		RunAttempt:    1,
+		Status:        status,
+		Timestamp:     timestamp,
 	}
+}
 
-	ProcessEvent(event)
+func TestProcessSavesPipelineStateWithoutNotifyingRunningEvent(t *testing.T) {
+	processor, stateRepository, notifier := newTestProcessor()
+	event := workflowEvent("delivery-1", models.PipelineStatusRunning, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
 
-	state := repository.GetState(event.PipelineID)
+	processor.Process(context.Background(), event)
+
+	state := stateRepository.GetState(event.PipelineKey())
 	if state == nil {
 		t.Fatal("expected state to be saved")
 	}
-
-	if state.Status != event.Status {
-		t.Fatalf("status = %q, want %q", state.Status, event.Status)
+	if state.LastDeliveryID != "delivery-1" {
+		t.Fatalf("LastDeliveryID = %q, want delivery-1", state.LastDeliveryID)
 	}
-	if state.Timestamp != event.Timestamp {
-		t.Fatalf("timestamp = %q, want %q", state.Timestamp, event.Timestamp)
-	}
-	if state.LastEventID != event.EventID {
-		t.Fatalf("last event id = %q, want %q", state.LastEventID, event.EventID)
-	}
-	if len(*notifications) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(*notifications))
+	if len(notifier.events) != 0 {
+		t.Fatalf("notifications = %d, want 0", len(notifier.events))
 	}
 }
 
-func TestProcessEventIgnoresDuplicateEvent(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
+func TestProcessNotifiesEachNewFailedRunOnce(t *testing.T) {
+	processor, _, notifier := newTestProcessor()
+	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	event := models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	}
+	failed := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
+	processor.Process(context.Background(), failed)
+	processor.Process(context.Background(), failed)
 
-	ProcessEvent(event)
-	ProcessEvent(models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "failed",
-		Timestamp:  "2026-01-01T10:01:00Z",
-	})
+	nextFailedRun := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp.Add(time.Minute))
+	nextFailedRun.WorkflowRunID = 31
+	processor.Process(context.Background(), nextFailedRun)
 
-	state := repository.GetState(event.PipelineID)
-	if state == nil {
-		t.Fatal("expected state to exist")
-	}
-
-	if state.Status != "running" {
-		t.Fatalf("status = %q, want running", state.Status)
-	}
-	if state.Timestamp != "2026-01-01T10:00:00Z" {
-		t.Fatalf("timestamp = %q, want original timestamp", state.Timestamp)
-	}
-	if len(*notifications) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(*notifications))
+	if len(notifier.events) != 2 {
+		t.Fatalf("notifications = %d, want 2", len(notifier.events))
 	}
 }
 
-func TestProcessEventIgnoresOlderEvent(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
+func TestProcessIgnoresOlderAndLowerPriorityEvents(t *testing.T) {
+	processor, stateRepository, notifier := newTestProcessor()
+	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 
-	ProcessEvent(models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "failed",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
+	processor.Process(context.Background(), workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp))
+	processor.Process(context.Background(), workflowEvent("delivery-2", models.PipelineStatusRunning, timestamp.Add(-time.Minute)))
+	processor.Process(context.Background(), workflowEvent("delivery-3", models.PipelineStatusSuccess, timestamp))
 
-	ProcessEvent(models.Event{
-		EventID:    "evt-2",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T09:59:00Z",
-	})
-
-	state := repository.GetState("pipeline-1")
+	state := stateRepository.GetState("10:20")
 	if state == nil {
 		t.Fatal("expected state to exist")
 	}
-
-	if state.Status != "failed" {
-		t.Fatalf("status = %q, want failed", state.Status)
+	if state.Status != models.PipelineStatusFailed {
+		t.Fatalf("Status = %q, want failed", state.Status)
 	}
-	if state.LastEventID != "evt-1" {
-		t.Fatalf("last event id = %q, want evt-1", state.LastEventID)
+	if state.LastDeliveryID != "delivery-1" {
+		t.Fatalf("LastDeliveryID = %q, want delivery-1", state.LastDeliveryID)
 	}
-	if len(*notifications) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(*notifications))
-	}
-}
-
-func TestProcessEventUsesStatusPriorityWhenTimestampMatches(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-2",
-		PipelineID: "pipeline-1",
-		Status:     "success",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
-
-	state := repository.GetState("pipeline-1")
-	if state == nil {
-		t.Fatal("expected state to exist")
-	}
-
-	if state.Status != "success" {
-		t.Fatalf("status = %q, want success", state.Status)
-	}
-	if state.LastEventID != "evt-2" {
-		t.Fatalf("last event id = %q, want evt-2", state.LastEventID)
-	}
-	if len(*notifications) != 2 {
-		t.Fatalf("notifications = %d, want 2", len(*notifications))
-	}
-}
-
-func TestProcessEventIgnoresLowerPriorityWhenTimestampMatches(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "failed",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-2",
-		PipelineID: "pipeline-1",
-		Status:     "success",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
-
-	state := repository.GetState("pipeline-1")
-	if state == nil {
-		t.Fatal("expected state to exist")
-	}
-
-	if state.Status != "failed" {
-		t.Fatalf("status = %q, want failed", state.Status)
-	}
-	if state.LastEventID != "evt-1" {
-		t.Fatalf("last event id = %q, want evt-1", state.LastEventID)
-	}
-	if len(*notifications) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(*notifications))
-	}
-}
-
-func TestProcessEventUpdatesStateWithoutNotifyingWhenStatusDoesNotChange(t *testing.T) {
-	repository.Reset()
-	notifications := captureNotifications(t)
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-1",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T10:00:00Z",
-	})
-
-	ProcessEvent(models.Event{
-		EventID:    "evt-2",
-		PipelineID: "pipeline-1",
-		Status:     "running",
-		Timestamp:  "2026-01-01T10:01:00Z",
-	})
-
-	state := repository.GetState("pipeline-1")
-	if state == nil {
-		t.Fatal("expected state to exist")
-	}
-
-	if state.Timestamp != "2026-01-01T10:01:00Z" {
-		t.Fatalf("timestamp = %q, want updated timestamp", state.Timestamp)
-	}
-	if state.LastEventID != "evt-2" {
-		t.Fatalf("last event id = %q, want evt-2", state.LastEventID)
-	}
-	if len(*notifications) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(*notifications))
+	if len(notifier.events) != 1 {
+		t.Fatalf("notifications = %d, want 1", len(notifier.events))
 	}
 }
