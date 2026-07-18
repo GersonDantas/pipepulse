@@ -44,7 +44,7 @@ Estados permitidos:
 
 | Fase | Entrega | Estado | Branch | PR | Dependência para avançar |
 | ---: | --- | --- | --- | --- | --- |
-| 0 | Plano central e alinhamento documental | em revisão | `docs/mvp-central-plan` | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | revisão e aprovação explícita do usuário |
+| 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
 | 1 | Fundação Go | pendente | `feat/mvp-backend-foundation` | não aberto | Fase 0 aprovada |
 | 2 | PostgreSQL e persistência durável | pendente | `feat/mvp-postgres` | não aberto | Fase 1 aprovada |
 | 3 | Webhook GitHub vertical | pendente | `feat/mvp-github-webhook` | não aberto | Fase 2 aprovada |
@@ -63,7 +63,7 @@ Atualizar uma linha ao abrir, revisar, aprovar ou rejeitar cada PR. O relatório
 
 | Fase | PR | Branch | Estado | Commits | Testes | Aprovação do usuário | Observações |
 | ---: | --- | --- | --- | ---: | --- | --- | --- |
-| 0 | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | `docs/mvp-central-plan` | em revisão | 2 | `git diff --check`, `go test ./...` e `go vet ./...` verdes | pendente | plano central criado, documentos antigos alinhados e relatório de revisão entregue |
+| 0 | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | `docs/mvp-central-plan` | aprovada | 3 | `git diff --check`, `go test ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário | plano central criado, documentos antigos alinhados e Fase 1 liberada |
 
 Nenhuma linha pode ser marcada como `aprovada` sem a confirmação explícita do usuário. Quando um PR for reprovado ou exigir correções, manter o mesmo registro e anotar a nova rodada de testes.
 
