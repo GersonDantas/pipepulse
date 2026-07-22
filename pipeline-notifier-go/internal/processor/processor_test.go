@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -71,6 +72,48 @@ func TestProcessNotifiesEachNewFailedRunOnce(t *testing.T) {
 
 	if len(notifier.events) != 2 {
 		t.Fatalf("notifications = %d, want 2", len(notifier.events))
+	}
+}
+
+func TestProcessNotifiesDifferentFailedRunsWithEqualTimestamp(t *testing.T) {
+	processor, _, notifier := newTestProcessor()
+	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+
+	firstFailedRun := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
+	processor.Process(context.Background(), firstFailedRun)
+
+	secondFailedRun := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp)
+	secondFailedRun.WorkflowRunID = 31
+	processor.Process(context.Background(), secondFailedRun)
+
+	if len(notifier.events) != 2 {
+		t.Fatalf("notifications = %d, want 2 for different failed runs", len(notifier.events))
+	}
+}
+
+func TestProcessPersistsWorkflowConclusion(t *testing.T) {
+	processor, stateRepository, _ := newTestProcessor()
+	event := workflowEvent("delivery-1", models.PipelineStatusFailed, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
+	event.Conclusion = "timed_out"
+
+	processor.Process(context.Background(), event)
+
+	state := stateRepository.GetState(event.PipelineKey())
+	if state == nil {
+		t.Fatal("expected state to be saved")
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var response struct {
+		Conclusion string `json:"conclusion"`
+	}
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if response.Conclusion != event.Conclusion {
+		t.Fatalf("Conclusion = %q, want %q", response.Conclusion, event.Conclusion)
 	}
 }
 

@@ -14,6 +14,7 @@ type State struct {
 	WorkflowRunID  int64                 `json:"workflow_run_id"`
 	RunAttempt     int                   `json:"run_attempt"`
 	Status         models.PipelineStatus `json:"status"`
+	Conclusion     string                `json:"conclusion"`
 	Timestamp      time.Time             `json:"timestamp"`
 	LastDeliveryID string                `json:"last_delivery_id"`
 }

@@ -51,9 +51,13 @@ func (processor *Processor) Process(ctx context.Context, event models.Event) {
 		return
 	}
 
-	if current != nil && event.Timestamp.Equal(current.Timestamp) && event.Status.Priority() <= current.Status.Priority() {
-		processor.logger.Debug("equal timestamp event with lower priority ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
-		return
+	if current != nil && event.Timestamp.Equal(current.Timestamp) {
+		if event.Status.Priority() < current.Status.Priority() ||
+			(event.Status.Priority() == current.Status.Priority() &&
+				event.WorkflowRunID == current.WorkflowRunID && event.RunAttempt == current.RunAttempt) {
+			processor.logger.Debug("equal timestamp event with lower priority or same run ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
+			return
+		}
 	}
 
 	processor.repository.SaveState(repository.State{
@@ -63,6 +67,7 @@ func (processor *Processor) Process(ctx context.Context, event models.Event) {
 		WorkflowRunID:  event.WorkflowRunID,
 		RunAttempt:     event.RunAttempt,
 		Status:         event.Status,
+		Conclusion:     event.Conclusion,
 		Timestamp:      event.Timestamp,
 		LastDeliveryID: event.DeliveryID,
 	})
