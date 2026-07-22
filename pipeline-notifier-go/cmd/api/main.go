@@ -38,7 +38,7 @@ func main() {
 	handler := handlers.New(webhookService, stateRepository, logger)
 	server := &http.Server{
 		Addr:              ":" + configuration.Port,
-		Handler:           internalRouter.SetupRouter(handler),
+		Handler:           internalRouter.SetupRouter(handler, logger),
 		ReadHeaderTimeout: configuration.ReadHeaderTimeout,
 		WriteTimeout:      configuration.WriteTimeout,
 		IdleTimeout:       configuration.IdleTimeout,
