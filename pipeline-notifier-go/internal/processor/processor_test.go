@@ -2,7 +2,8 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -12,20 +13,101 @@ import (
 	"pipeline-notifier/internal/repository"
 )
 
-type fakeNotifier struct {
-	events []models.Event
-}
+func TestProcessAppliesTemporalRulesAndCreatesFailureOutbox(t *testing.T) {
+	t.Run("running event updates state without failure", func(t *testing.T) {
+		processor, store := newTestProcessor()
+		event := workflowEvent("delivery-1", models.PipelineStatusRunning, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
 
-func (notifier *fakeNotifier) Notify(_ context.Context, event models.Event) error {
-	notifier.events = append(notifier.events, event)
-	return nil
-}
+		if err := processor.Process(context.Background(), event); err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
 
-func newTestProcessor() (*Processor, *repository.MemoryStateRepository, *fakeNotifier) {
-	stateRepository := repository.NewMemoryStateRepository()
-	notifier := &fakeNotifier{}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(stateRepository, notifier, logger), stateRepository, notifier
+		state := store.states[event.PipelineKey()]
+		if state.LastDeliveryID != event.DeliveryID {
+			t.Fatalf("LastDeliveryID = %q, want %q", state.LastDeliveryID, event.DeliveryID)
+		}
+		if len(store.failures) != 0 || store.notifications != 0 {
+			t.Fatalf("failures = %d, notifications = %d, want zero", len(store.failures), store.notifications)
+		}
+	})
+
+	t.Run("running to failed in the same run creates exactly one failure", func(t *testing.T) {
+		processor, store := newTestProcessor()
+		timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+		running := workflowEvent("delivery-1", models.PipelineStatusRunning, timestamp)
+		failed := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp.Add(time.Minute))
+
+		if err := processor.Process(context.Background(), running); err != nil {
+			t.Fatalf("Process(running) error = %v", err)
+		}
+		if err := processor.Process(context.Background(), failed); err != nil {
+			t.Fatalf("Process(failed) error = %v", err)
+		}
+		repeated := failed
+		repeated.DeliveryID = "delivery-3"
+		repeated.Timestamp = repeated.Timestamp.Add(time.Minute)
+		if err := processor.Process(context.Background(), repeated); err != nil {
+			t.Fatalf("Process(repeated) error = %v", err)
+		}
+
+		if len(store.failures) != 1 || store.notifications != 1 {
+			t.Fatalf("failures = %d, notifications = %d, want 1 each", len(store.failures), store.notifications)
+		}
+	})
+
+	t.Run("different failed runs with equal timestamp each create a failure", func(t *testing.T) {
+		processor, store := newTestProcessor()
+		timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+		first := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
+		second := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp)
+		second.WorkflowRunID = 31
+
+		if err := processor.Process(context.Background(), first); err != nil {
+			t.Fatalf("Process(first) error = %v", err)
+		}
+		if err := processor.Process(context.Background(), second); err != nil {
+			t.Fatalf("Process(second) error = %v", err)
+		}
+
+		if len(store.failures) != 2 || store.notifications != 2 {
+			t.Fatalf("failures = %d, notifications = %d, want 2 each", len(store.failures), store.notifications)
+		}
+	})
+
+	t.Run("older and lower priority events complete without changing state", func(t *testing.T) {
+		processor, store := newTestProcessor()
+		timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+		failed := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
+		older := workflowEvent("delivery-2", models.PipelineStatusRunning, timestamp.Add(-time.Minute))
+		lowerPriority := workflowEvent("delivery-3", models.PipelineStatusSuccess, timestamp)
+
+		for _, event := range []models.Event{failed, older, lowerPriority} {
+			if err := processor.Process(context.Background(), event); err != nil {
+				t.Fatalf("Process(%s) error = %v", event.DeliveryID, err)
+			}
+		}
+
+		state := store.states[failed.PipelineKey()]
+		if state.LastDeliveryID != failed.DeliveryID || state.Status != models.PipelineStatusFailed {
+			t.Fatalf("state = %#v, want first failed event", state)
+		}
+		if store.completed[older.DeliveryID] != "older_event" || store.completed[lowerPriority.DeliveryID] != "lower_priority" {
+			t.Fatalf("ignored reasons = %#v", store.completed)
+		}
+	})
+
+	t.Run("transaction error rolls back state and delivery", func(t *testing.T) {
+		processor, store := newTestProcessor()
+		store.failureError = errors.New("database unavailable")
+		event := workflowEvent("delivery-1", models.PipelineStatusFailed, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
+
+		if err := processor.Process(context.Background(), event); err == nil {
+			t.Fatal("Process() error = nil, want failure")
+		}
+		if len(store.states) != 0 || len(store.completed) != 0 {
+			t.Fatalf("state or delivery committed after error: states=%#v completed=%#v", store.states, store.completed)
+		}
+	})
 }
 
 func workflowEvent(deliveryID string, status models.PipelineStatus, timestamp time.Time) models.Event {
@@ -36,106 +118,100 @@ func workflowEvent(deliveryID string, status models.PipelineStatus, timestamp ti
 		WorkflowRunID: 30,
 		RunAttempt:    1,
 		Status:        status,
+		Conclusion:    string(status),
 		Timestamp:     timestamp,
 	}
 }
 
-func TestProcessSavesPipelineStateWithoutNotifyingRunningEvent(t *testing.T) {
-	processor, stateRepository, notifier := newTestProcessor()
-	event := workflowEvent("delivery-1", models.PipelineStatusRunning, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
-
-	processor.Process(context.Background(), event)
-
-	state := stateRepository.GetState(event.PipelineKey())
-	if state == nil {
-		t.Fatal("expected state to be saved")
+func newTestProcessor() (*Processor, *fakeRepository) {
+	store := &fakeRepository{
+		states:    make(map[string]repository.State),
+		failures:  make(map[string]bool),
+		completed: make(map[string]string),
 	}
-	if state.LastDeliveryID != "delivery-1" {
-		t.Fatalf("LastDeliveryID = %q, want delivery-1", state.LastDeliveryID)
-	}
-	if len(notifier.events) != 0 {
-		t.Fatalf("notifications = %d, want 0", len(notifier.events))
-	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return New(store, logger), store
 }
 
-func TestProcessNotifiesEachNewFailedRunOnce(t *testing.T) {
-	processor, _, notifier := newTestProcessor()
-	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	failed := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
-	processor.Process(context.Background(), failed)
-	processor.Process(context.Background(), failed)
-
-	nextFailedRun := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp.Add(time.Minute))
-	nextFailedRun.WorkflowRunID = 31
-	processor.Process(context.Background(), nextFailedRun)
-
-	if len(notifier.events) != 2 {
-		t.Fatalf("notifications = %d, want 2", len(notifier.events))
-	}
+type fakeRepository struct {
+	states        map[string]repository.State
+	failures      map[string]bool
+	completed     map[string]string
+	notifications int
+	failureError  error
 }
 
-func TestProcessNotifiesDifferentFailedRunsWithEqualTimestamp(t *testing.T) {
-	processor, _, notifier := newTestProcessor()
-	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-
-	firstFailedRun := workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp)
-	processor.Process(context.Background(), firstFailedRun)
-
-	secondFailedRun := workflowEvent("delivery-2", models.PipelineStatusFailed, timestamp)
-	secondFailedRun.WorkflowRunID = 31
-	processor.Process(context.Background(), secondFailedRun)
-
-	if len(notifier.events) != 2 {
-		t.Fatalf("notifications = %d, want 2 for different failed runs", len(notifier.events))
+func (store *fakeRepository) BeginProcessing(_ context.Context, event models.Event) (repository.EventTransaction, error) {
+	current, ok := store.states[event.PipelineKey()]
+	var currentPointer *repository.State
+	if ok {
+		copy := current
+		currentPointer = &copy
 	}
+	return &fakeTransaction{store: store, event: event, current: currentPointer}, nil
 }
 
-func TestProcessPersistsWorkflowConclusion(t *testing.T) {
-	processor, stateRepository, _ := newTestProcessor()
-	event := workflowEvent("delivery-1", models.PipelineStatusFailed, time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC))
-	event.Conclusion = "timed_out"
-
-	processor.Process(context.Background(), event)
-
-	state := stateRepository.GetState(event.PipelineKey())
-	if state == nil {
-		t.Fatal("expected state to be saved")
-	}
-	payload, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	var response struct {
-		Conclusion string `json:"conclusion"`
-	}
-	if err := json.Unmarshal(payload, &response); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	if response.Conclusion != event.Conclusion {
-		t.Fatalf("Conclusion = %q, want %q", response.Conclusion, event.Conclusion)
-	}
+type fakeTransaction struct {
+	store               *fakeRepository
+	event               models.Event
+	current             *repository.State
+	state               *repository.State
+	failureKey          string
+	failureCreated      bool
+	notifications       int
+	ignoredReason       string
+	deliveryWasComplete bool
+	committed           bool
 }
 
-func TestProcessIgnoresOlderAndLowerPriorityEvents(t *testing.T) {
-	processor, stateRepository, notifier := newTestProcessor()
-	timestamp := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+func (transaction *fakeTransaction) CurrentState() *repository.State {
+	return transaction.current
+}
 
-	processor.Process(context.Background(), workflowEvent("delivery-1", models.PipelineStatusFailed, timestamp))
-	processor.Process(context.Background(), workflowEvent("delivery-2", models.PipelineStatusRunning, timestamp.Add(-time.Minute)))
-	processor.Process(context.Background(), workflowEvent("delivery-3", models.PipelineStatusSuccess, timestamp))
+func (transaction *fakeTransaction) SaveState(_ context.Context, state repository.State) error {
+	transaction.state = &state
+	return nil
+}
 
-	state := stateRepository.GetState("10:20")
-	if state == nil {
-		t.Fatal("expected state to exist")
+func (transaction *fakeTransaction) CreateFailure(_ context.Context, event models.Event) (string, bool, error) {
+	if transaction.store.failureError != nil {
+		return "", false, transaction.store.failureError
 	}
-	if state.Status != models.PipelineStatusFailed {
-		t.Fatalf("Status = %q, want failed", state.Status)
+	key := fmt.Sprintf("%d:%d:%d:%d", event.RepositoryID, event.WorkflowID, event.WorkflowRunID, event.RunAttempt)
+	if transaction.store.failures[key] {
+		return "", false, nil
 	}
-	if state.LastDeliveryID != "delivery-1" {
-		t.Fatalf("LastDeliveryID = %q, want delivery-1", state.LastDeliveryID)
+	transaction.failureKey = key
+	transaction.failureCreated = true
+	return key, true, nil
+}
+
+func (transaction *fakeTransaction) CreateNotifications(_ context.Context, _ string) (int64, error) {
+	transaction.notifications++
+	return 1, nil
+}
+
+func (transaction *fakeTransaction) CompleteDelivery(_ context.Context, ignoredReason string) error {
+	transaction.deliveryWasComplete = true
+	transaction.ignoredReason = ignoredReason
+	return nil
+}
+
+func (transaction *fakeTransaction) Commit(context.Context) error {
+	if transaction.state != nil {
+		transaction.store.states[transaction.event.PipelineKey()] = *transaction.state
 	}
-	if len(notifier.events) != 1 {
-		t.Fatalf("notifications = %d, want 1", len(notifier.events))
+	if transaction.failureCreated {
+		transaction.store.failures[transaction.failureKey] = true
 	}
+	transaction.store.notifications += transaction.notifications
+	if transaction.deliveryWasComplete {
+		transaction.store.completed[transaction.event.DeliveryID] = transaction.ignoredReason
+	}
+	transaction.committed = true
+	return nil
+}
+
+func (transaction *fakeTransaction) Rollback(context.Context) error {
+	return nil
 }

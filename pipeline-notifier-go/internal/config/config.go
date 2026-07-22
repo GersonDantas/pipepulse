@@ -4,34 +4,41 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultPort              = "3000"
-	defaultEnvironment       = "development"
-	defaultLogLevel          = "info"
-	defaultReadHeaderTimeout = 5 * time.Second
-	defaultWriteTimeout      = 15 * time.Second
-	defaultIdleTimeout       = 60 * time.Second
-	defaultShutdownTimeout   = 10 * time.Second
-	defaultQueueSize         = 100
+	defaultPort               = "3000"
+	defaultEnvironment        = "development"
+	defaultLogLevel           = "info"
+	defaultReadHeaderTimeout  = 5 * time.Second
+	defaultWriteTimeout       = 15 * time.Second
+	defaultIdleTimeout        = 60 * time.Second
+	defaultShutdownTimeout    = 10 * time.Second
+	defaultWorkerPollInterval = 5 * time.Second
+	defaultRetentionInterval  = 24 * time.Hour
 )
 
 type Config struct {
-	Port              string
-	Environment       string
-	LogLevel          slog.Level
-	ReadHeaderTimeout time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	QueueSize         int
+	Port               string
+	DatabaseURL        string
+	Environment        string
+	LogLevel           slog.Level
+	ReadHeaderTimeout  time.Duration
+	WriteTimeout       time.Duration
+	IdleTimeout        time.Duration
+	ShutdownTimeout    time.Duration
+	WorkerPollInterval time.Duration
+	RetentionInterval  time.Duration
 }
 
 func Load() (Config, error) {
+	databaseURL, err := requiredEnv("DATABASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+
 	logLevel, err := parseLogLevel(envOrDefault("LOG_LEVEL", defaultLogLevel))
 	if err != nil {
 		return Config{}, err
@@ -53,21 +60,35 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	queueSize, err := intFromEnv("QUEUE_SIZE", defaultQueueSize)
+	workerPollInterval, err := durationFromEnv("WORKER_POLL_INTERVAL", defaultWorkerPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	retentionInterval, err := durationFromEnv("RETENTION_INTERVAL", defaultRetentionInterval)
 	if err != nil {
 		return Config{}, err
 	}
 
 	return Config{
-		Port:              envOrDefault("PORT", defaultPort),
-		Environment:       envOrDefault("ENVIRONMENT", defaultEnvironment),
-		LogLevel:          logLevel,
-		ReadHeaderTimeout: readHeaderTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		ShutdownTimeout:   shutdownTimeout,
-		QueueSize:         queueSize,
+		Port:               envOrDefault("PORT", defaultPort),
+		DatabaseURL:        databaseURL,
+		Environment:        envOrDefault("ENVIRONMENT", defaultEnvironment),
+		LogLevel:           logLevel,
+		ReadHeaderTimeout:  readHeaderTimeout,
+		WriteTimeout:       writeTimeout,
+		IdleTimeout:        idleTimeout,
+		ShutdownTimeout:    shutdownTimeout,
+		WorkerPollInterval: workerPollInterval,
+		RetentionInterval:  retentionInterval,
 	}, nil
+}
+
+func requiredEnv(key string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	return value, nil
 }
 
 func envOrDefault(key, fallback string) string {
@@ -84,15 +105,6 @@ func durationFromEnv(key string, fallback time.Duration) (time.Duration, error) 
 		return 0, fmt.Errorf("%s must be a positive duration", key)
 	}
 	return duration, nil
-}
-
-func intFromEnv(key string, fallback int) (int, error) {
-	value := envOrDefault(key, strconv.Itoa(fallback))
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%s must be a positive integer", key)
-	}
-	return parsed, nil
 }
 
 func parseLogLevel(value string) (slog.Level, error) {

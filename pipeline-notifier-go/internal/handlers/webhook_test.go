@@ -108,7 +108,7 @@ func TestGithubWebhookRejectsMissingRequiredHeadersAndInvalidPayload(t *testing.
 func TestGetPipelineStateReturnsState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	stateRepository := repository.NewMemoryStateRepository()
-	stateRepository.SaveState(repository.State{
+	if err := stateRepository.SaveState(context.Background(), repository.State{
 		PipelineID:     "10:30",
 		RepositoryID:   10,
 		WorkflowID:     30,
@@ -117,7 +117,9 @@ func TestGetPipelineStateReturnsState(t *testing.T) {
 		Status:         models.PipelineStatusFailed,
 		Timestamp:      time.Date(2026, time.May, 16, 15, 0, 0, 0, time.UTC),
 		LastDeliveryID: "delivery-1",
-	})
+	}); err != nil {
+		t.Fatalf("SaveState() error = %v", err)
+	}
 	handler := newTestHandler(&fakeWorkflowRunService{}, stateRepository)
 	router := gin.New()
 	router.GET("/pipelines/:id", handler.GetPipelineState)

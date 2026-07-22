@@ -19,11 +19,11 @@ type WorkflowRunService interface {
 
 type Handler struct {
 	service    WorkflowRunService
-	repository repository.StateRepository
+	repository repository.StateReader
 	logger     *slog.Logger
 }
 
-func New(service WorkflowRunService, stateRepository repository.StateRepository, logger *slog.Logger) *Handler {
+func New(service WorkflowRunService, stateRepository repository.StateReader, logger *slog.Logger) *Handler {
 	return &Handler{service: service, repository: stateRepository, logger: logger}
 }
 
@@ -72,7 +72,12 @@ func (handler *Handler) GithubWebhook(c *gin.Context) {
 }
 
 func (handler *Handler) GetPipelineState(c *gin.Context) {
-	state := handler.repository.GetState(c.Param("id"))
+	state, err := handler.repository.GetState(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		handler.logger.Error("pipeline state lookup failed", "pipeline_id", c.Param("id"), "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
+		return
+	}
 	if state == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "state not found"})
 		return

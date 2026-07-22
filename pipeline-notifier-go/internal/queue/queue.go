@@ -5,41 +5,74 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"pipeline-notifier/internal/models"
 )
 
 var ErrQueueClosed = errors.New("event queue is closed")
-var ErrQueueFull = errors.New("event queue is full")
+
+type DeliveryStore interface {
+	Enqueue(context.Context, models.Event) (bool, error)
+	NextPending(context.Context) (*models.Event, error)
+}
 
 type EventProcessor interface {
-	Process(context.Context, models.Event)
+	Process(context.Context, models.Event) error
 }
 
 type EventQueue struct {
-	events       chan models.Event
+	store        DeliveryStore
+	wakeups      chan struct{}
+	pollInterval time.Duration
 	logger       *slog.Logger
+
 	mu           sync.RWMutex
 	closed       bool
-	shutdownOnce sync.Once
+	started      bool
+	cancel       context.CancelFunc
 	done         chan struct{}
+	shutdownOnce sync.Once
 }
 
-func New(size int, logger *slog.Logger) *EventQueue {
+func New(store DeliveryStore, pollInterval time.Duration, logger *slog.Logger) *EventQueue {
 	return &EventQueue{
-		events: make(chan models.Event, size),
-		logger: logger,
-		done:   make(chan struct{}),
+		store:        store,
+		wakeups:      make(chan struct{}, 1),
+		pollInterval: pollInterval,
+		logger:       logger,
+		done:         make(chan struct{}),
 	}
 }
 
 func (queue *EventQueue) Start(processor EventProcessor) {
+	queue.mu.Lock()
+	if queue.started || queue.closed {
+		queue.mu.Unlock()
+		return
+	}
+	queue.started = true
+	workerContext, cancel := context.WithCancel(context.Background())
+	queue.cancel = cancel
+	queue.mu.Unlock()
+
 	go func() {
 		defer close(queue.done)
-		for event := range queue.events {
-			processor.Process(context.Background(), event)
+		ticker := time.NewTicker(queue.pollInterval)
+		defer ticker.Stop()
+
+		queue.drain(workerContext, processor)
+		for {
+			select {
+			case <-workerContext.Done():
+				queue.logger.Info("event worker stopped")
+				return
+			case <-queue.wakeups:
+				queue.drain(workerContext, processor)
+			case <-ticker.C:
+				queue.drain(workerContext, processor)
+			}
 		}
-		queue.logger.Info("event worker stopped")
 	}()
 }
 
@@ -54,20 +87,32 @@ func (queue *EventQueue) Enqueue(ctx context.Context, event models.Event) error 
 		return ErrQueueClosed
 	}
 
-	select {
-	case queue.events <- event:
-		queue.logger.Debug("event enqueued", "delivery_id", event.DeliveryID)
-		return nil
-	default:
-		return ErrQueueFull
+	inserted, err := queue.store.Enqueue(ctx, event)
+	if err != nil {
+		return err
 	}
+	if !inserted {
+		queue.logger.Debug("duplicate delivery already persisted", "delivery_id", event.DeliveryID)
+		return nil
+	}
+
+	select {
+	case queue.wakeups <- struct{}{}:
+	default:
+	}
+	queue.logger.Debug("delivery persisted and worker signalled", "delivery_id", event.DeliveryID)
+	return nil
 }
 
 func (queue *EventQueue) Shutdown(ctx context.Context) error {
 	queue.shutdownOnce.Do(func() {
 		queue.mu.Lock()
 		queue.closed = true
-		close(queue.events)
+		if queue.cancel != nil {
+			queue.cancel()
+		} else {
+			close(queue.done)
+		}
 		queue.mu.Unlock()
 	})
 
@@ -76,5 +121,22 @@ func (queue *EventQueue) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (queue *EventQueue) drain(ctx context.Context, processor EventProcessor) {
+	for ctx.Err() == nil {
+		event, err := queue.store.NextPending(ctx)
+		if err != nil {
+			queue.logger.Error("pending delivery lookup failed", "error", err)
+			return
+		}
+		if event == nil {
+			return
+		}
+		if err := processor.Process(ctx, *event); err != nil {
+			queue.logger.Error("delivery processing failed", "delivery_id", event.DeliveryID, "error", err)
+			return
+		}
 	}
 }
