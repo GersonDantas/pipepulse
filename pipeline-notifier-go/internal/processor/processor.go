@@ -1,60 +1,99 @@
 package processor
 
 import (
-	"fmt"
+	"context"
+	"log/slog"
+
 	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/repository"
 )
 
-var notifyFn = func(event models.Event) {
-	fmt.Println("🔔 Notificação:", event.Status)
+type Notifier interface {
+	Notify(context.Context, models.Event) error
 }
 
-func ProcessEvent(event models.Event) {
-	current := repository.GetState(event.PipelineID)
+type NotifierFunc func(context.Context, models.Event) error
 
-	// 🔁 Idempotência
-	if current != nil && current.LastEventID == event.EventID {
-		fmt.Println("⚠️ Evento duplicado")
+func (function NotifierFunc) Notify(ctx context.Context, event models.Event) error {
+	return function(ctx, event)
+}
+
+type Processor struct {
+	repository repository.StateRepository
+	notifier   Notifier
+	logger     *slog.Logger
+}
+
+func New(stateRepository repository.StateRepository, notifier Notifier, logger *slog.Logger) *Processor {
+	return &Processor{
+		repository: stateRepository,
+		notifier:   notifier,
+		logger:     logger,
+	}
+}
+
+func (processor *Processor) Process(ctx context.Context, event models.Event) {
+	if err := ctx.Err(); err != nil {
+		processor.logger.Debug("event skipped because context is cancelled", "delivery_id", event.DeliveryID)
 		return
 	}
 
-	// ⏳ Timestamp (simplificado)
-	if current != nil && event.Timestamp < current.Timestamp {
-		fmt.Println("⏳ Evento antigo")
+	pipelineID := event.PipelineKey()
+	current := processor.repository.GetState(pipelineID)
+
+	if current != nil && current.LastDeliveryID == event.DeliveryID {
+		processor.logger.Debug("duplicate delivery ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
 		return
 	}
 
-	// ⚖️ Prioridade
-	if current != nil && event.Timestamp == current.Timestamp {
-		if event.Status.Priority() <= current.Status.Priority() {
-			fmt.Println("⚖️ Prioridade menor")
+	if current != nil && event.Timestamp.Before(current.Timestamp) {
+		processor.logger.Debug("older event ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
+		return
+	}
+
+	if current != nil && event.Timestamp.Equal(current.Timestamp) {
+		if event.Status.Priority() < current.Status.Priority() ||
+			(event.Status.Priority() == current.Status.Priority() &&
+				event.WorkflowRunID == current.WorkflowRunID && event.RunAttempt == current.RunAttempt) {
+			processor.logger.Debug("equal timestamp event with lower priority or same run ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
 			return
 		}
 	}
 
-	repository.SaveState(repository.State{
-		PipelineID:  event.PipelineID,
-		Status:      event.Status,
-		Timestamp:   event.Timestamp,
-		LastEventID: event.EventID,
+	processor.repository.SaveState(repository.State{
+		PipelineID:     pipelineID,
+		RepositoryID:   event.RepositoryID,
+		WorkflowID:     event.WorkflowID,
+		WorkflowRunID:  event.WorkflowRunID,
+		RunAttempt:     event.RunAttempt,
+		Status:         event.Status,
+		Conclusion:     event.Conclusion,
+		Timestamp:      event.Timestamp,
+		LastDeliveryID: event.DeliveryID,
 	})
 
-	fmt.Println("✅ Estado atualizado:", event.Status)
+	processor.logger.Info("pipeline state updated", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID, "status", event.Status)
 
-	if shouldNotify(current, event) {
-		notify(event)
+	if processor.shouldNotify(current, event) {
+		if err := processor.notifier.Notify(ctx, event); err != nil {
+			processor.logger.Error("notification failed", "delivery_id", event.DeliveryID, "error", err)
+		}
 	}
 }
 
-func shouldNotify(current *repository.State, event models.Event) bool {
+func (processor *Processor) shouldNotify(current *repository.State, event models.Event) bool {
+	if event.Status != models.PipelineStatusFailed {
+		return false
+	}
 	if current == nil {
 		return true
 	}
-
-	return current.Status != event.Status
+	return current.WorkflowRunID != event.WorkflowRunID || current.RunAttempt != event.RunAttempt
 }
 
-func notify(event models.Event) {
-	notifyFn(event)
+func NewLogNotifier(logger *slog.Logger) Notifier {
+	return NotifierFunc(func(_ context.Context, event models.Event) error {
+		logger.Info("notification queued for future delivery", "delivery_id", event.DeliveryID, "workflow_run_id", event.WorkflowRunID, "status", event.Status)
+		return nil
+	})
 }

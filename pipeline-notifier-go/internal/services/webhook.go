@@ -1,59 +1,40 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"pipeline-notifier/internal/models"
-	"pipeline-notifier/internal/queue"
 )
 
 var ErrInvalidTimestamp = errors.New("invalid timestamp")
 var ErrInvalidStatus = errors.New("invalid status")
+var ErrQueueUnavailable = errors.New("event queue unavailable")
 
-var enqueueFn = queue.Enqueue
+type EventEnqueuer interface {
+	Enqueue(context.Context, models.Event) error
+}
 
-const normalizedTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+type WebhookService struct {
+	queue EventEnqueuer
+}
 
-func HandleWebhook(payload models.GithubWebhookPayload) error {
-	timestamp, err := normalizeTimestamp(payload.WorkflowRun.UpdatedAt)
+func NewWebhookService(queue EventEnqueuer) *WebhookService {
+	return &WebhookService{queue: queue}
+}
+
+func (service *WebhookService) Handle(ctx context.Context, deliveryID string, payload models.GithubWebhookPayload) error {
+	event, err := models.NewWorkflowRunEvent(deliveryID, payload)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidTimestamp, err)
+		if errors.Is(err, models.ErrInvalidEventTimestamp) {
+			return fmt.Errorf("%w: %v", ErrInvalidTimestamp, err)
+		}
+		return fmt.Errorf("%w: %v", ErrInvalidStatus, err)
 	}
 
-	status, ok := getStatus(payload.WorkflowRun)
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrInvalidStatus, *payload.WorkflowRun.Conclusion)
+	if err := service.queue.Enqueue(ctx, event); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueueUnavailable, err)
 	}
-
-	event := models.Event{
-		EventID:    fmt.Sprintf("%d", payload.WorkflowRun.ID),
-		PipelineID: fmt.Sprintf("%d", payload.WorkflowRun.ID),
-		Status:     status,
-		Timestamp:  timestamp,
-	}
-
-	fmt.Println("📩 Evento recebido:", event)
-
-	enqueueFn(event)
-
 	return nil
-}
-
-func getStatus(wr models.GithubWorkflowRun) (models.PipelineStatus, bool) {
-	if wr.Conclusion == nil || *wr.Conclusion == "" {
-		return models.PipelineStatusRunning, true
-	}
-
-	return models.NewPipelineStatus(*wr.Conclusion)
-}
-
-func normalizeTimestamp(value string) (string, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", err
-	}
-
-	return parsed.UTC().Format(normalizedTimestampLayout), nil
 }
