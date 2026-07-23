@@ -1,144 +1,128 @@
-# Pipeline Notifier
+# PipePulse Backend
 
-> Estado: este README descreve como executar o prototipo atual. Consulte [`RELATORIO_MVP.md`](./RELATORIO_MVP.md) para o plano central, o produto Flutter, a arquitetura alvo, as fases, o TDD e o processo obrigatorio de cada PR.
+Backend Go do PipePulse para receber eventos `workflow_run` do GitHub, persistir as entregas antes do aceite HTTP e processá-las de forma assíncrona e determinística.
 
-Backend em Go para receber eventos de pipelines via webhook, processar esses eventos de forma assincrona e manter um estado consistente mesmo quando eventos chegam duplicados ou fora de ordem.
+O plano central, o escopo do produto e a ordem das fases estão em [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Esse documento prevalece sobre descrições históricas do protótipo.
 
-Camada HTTP do MVP: `gin`.
-
-## Objetivo
-
-O projeto implementa um MVP de monitoramento de pipelines com foco em consistencia de estado.
-
-Ele recebe eventos externos, coloca esses eventos em uma fila interna e deixa o processor decidir se o estado do pipeline deve ser atualizado e se uma notificacao deve ser disparada.
-
-## Arquitetura
-
-Fluxo principal:
+## Arquitetura atual
 
 ```text
-Webhook -> Handler -> Service -> Queue -> Processor -> Repository -> Notification
+Webhook
+  -> normalização do evento
+  -> PostgreSQL: webhook_deliveries
+  -> sinal não durável para o worker
+  -> processor
+  -> transação de estado, falha, outbox e conclusão da entrega
 ```
 
-Responsabilidades:
+O PostgreSQL é a fonte de verdade. O canal em memória possui capacidade um e serve apenas para acordar o worker. Na inicialização e periodicamente, o worker consulta entregas pendentes, portanto um reinício ou sinal perdido não perde trabalho.
 
-| Camada | Papel |
-| --- | --- |
-| Handler | Recebe a requisicao HTTP com Gin e valida o payload |
-| Service | Converte o webhook externo em evento interno |
-| Queue | Desacopla entrada HTTP do processamento |
-| Processor | Aplica regras de negocio |
-| Repository | Mantem o ultimo estado valido em memoria |
-| Notification | Notifica somente apos persistir o novo estado |
+O processor aplica as regras de negócio. O repositório PostgreSQL abre a transação e executa as operações solicitadas pelo processor, sem decidir prioridade temporal ou relevância de falha.
 
-## Regras de Negocio
+## Pré-requisitos
 
-O processor segue esta ordem:
+- Go 1.25.12 ou compatível
+- PostgreSQL 16 ou compatível
+- Docker ou outro runtime de contêiner somente para os testes de integração locais
 
-1. Ignorar evento duplicado pelo `EventID`.
-2. Ignorar evento antigo pelo `Timestamp`.
-3. Resolver conflitos com mesmo timestamp por prioridade de status.
-4. Salvar o novo estado.
-5. Notificar quando houver mudanca relevante.
-
-Prioridade de status:
-
-```text
-failed > success > running
-```
-
-## Estrutura
-
-```text
-cmd/
-  api/
-    main.go
-internal/
-  handlers/
-  models/
-  processor/
-  queue/
-  repository/
-  services/
-```
-
-## Como Rodar
-
-Entre no diretorio do app:
+Exemplo de PostgreSQL local:
 
 ```bash
-cd pipeline-notifier-go
+docker run --rm --name pipepulse-postgres \
+  -e POSTGRES_USER=pipepulse \
+  -e POSTGRES_PASSWORD=pipepulse \
+  -e POSTGRES_DB=pipepulse \
+  -p 5432:5432 \
+  postgres:16-alpine
 ```
 
-Rode a API:
+## Configuração
+
+`DATABASE_URL` é obrigatória. As demais configurações abaixo possuem os valores padrão indicados.
+
+| Variável | Padrão | Finalidade |
+| --- | --- | --- |
+| `DATABASE_URL` | sem padrão | conexão PostgreSQL |
+| `PORT` | `3000` | porta HTTP |
+| `ENVIRONMENT` | `development` | identificação do ambiente |
+| `LOG_LEVEL` | `info` | nível dos logs JSON |
+| `WORKER_POLL_INTERVAL` | `5s` | intervalo de recuperação das entregas pendentes |
+| `RETENTION_INTERVAL` | `24h` | intervalo da limpeza de retenção |
+| `SHUTDOWN_TIMEOUT` | `10s` | limite do encerramento gracioso |
+
+As migrations Goose estão embutidas no binário e são aplicadas antes da abertura da API.
+
+## Execução
 
 ```bash
+export DATABASE_URL='postgres://pipepulse:pipepulse@localhost:5432/pipepulse?sslmode=disable'
 go run ./cmd/api
 ```
 
-Servidor:
+A API fica disponível em `http://localhost:3000` por padrão.
+
+## Endpoint provisório do webhook
 
 ```text
-http://localhost:3000
+POST /webhook/github
 ```
 
-## Endpoint
-
-### `POST /webhook/github`
-
-Exemplo de payload:
-
-```json
-{
-  "workflow_run": {
-    "id": 123,
-    "conclusion": "failed",
-    "updated_at": "2026-01-01T10:00:00Z"
-  }
-}
-```
-
-Quando `conclusion` estiver vazio ou nulo, o evento e tratado como `running`.
-
-Exemplo com `curl`:
+Exemplo:
 
 ```bash
-curl -X POST http://localhost:3000/webhook/github \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -i http://localhost:3000/webhook/github \
+  -H 'Content-Type: application/json' \
+  -H 'X-Hub-Signature-256: sha256=provisorio' \
+  -H 'X-GitHub-Delivery: delivery-1' \
+  --data '{
+    "repository": {"id": 10},
     "workflow_run": {
-      "id": 123,
-      "conclusion": "failed",
-      "updated_at": "2026-01-01T10:00:00Z"
+      "id": 30,
+      "workflow_id": 20,
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "failure",
+      "updated_at": "2026-07-22T12:00:00Z",
+      "head_branch": "main",
+      "head_sha": "abc123",
+      "html_url": "https://github.com/acme/api/actions/runs/30"
     }
   }'
 ```
 
+O endpoint por repositório, o limite de corpo, a validação HMAC real e a associação segura por `endpoint_id` pertencem à Fase 3. Nesta fase, o header de assinatura ainda é apenas obrigatório.
+
 ## Testes
+
+Suíte rápida:
 
 ```bash
 go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-## Estado Atual do MVP
+Migrations, transações, rollback, recuperação e retenção contra PostgreSQL efêmero:
 
-- API HTTP para webhook do GitHub.
-- Roteamento e binding HTTP com Gin.
-- Fila in-memory com channel buffered.
-- Worker assincrono com goroutine.
-- Repository in-memory.
-- Idempotencia por `EventID`.
-- Controle temporal por `Timestamp`.
-- Resolucao de conflito por prioridade de status.
+```bash
+PIPEPULSE_INTEGRATION=1 go test ./internal/database ./internal/repository -count=1
+```
 
-## Limitacoes Conhecidas
+## Estado da implementação
 
-- O estado e perdido ao reiniciar o processo.
-- O timestamp e comparado como string e deve estar em RFC3339/UTC.
-- O MVP usa um worker unico.
-- Notificacao ainda e representada por log no console.
-- Ainda nao ha persistencia real, fila distribuida ou dashboard.
+Concluído na Fase 2:
 
-## Documentacao Tecnica
+- pool PostgreSQL com `pgxpool`
+- schema completo do MVP em migration Goose embutida
+- persistência idempotente por `X-GitHub-Delivery`
+- transação atômica de estado, falha, outbox e entrega
+- recuperação de entregas pendentes após reinício
+- retenção de entregas, falhas Free e resultados de push
+- `plan_code=free` e contrato de entitlements
 
-Leia [ARCHITECTURE.md](./ARCHITECTURE.md) para o guia completo de arquitetura, decisoes e evolucoes futuras.
+Ainda fora do escopo desta fase:
+
+- endpoint por repositório e HMAC real
+- autenticação GitHub e isolamento HTTP por workspace
+- sender FCM e política de retry
+- aplicativo Flutter
