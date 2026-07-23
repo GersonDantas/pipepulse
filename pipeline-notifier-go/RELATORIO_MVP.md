@@ -46,7 +46,7 @@ Estados permitidos:
 | ---: | --- | --- | --- | --- | --- |
 | 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
 | 1 | Fundação Go | aprovada | `main` após merge | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | concluída |
-| 2 | PostgreSQL e persistência durável | em andamento | `feat/mvp-postgres` | não aberto | implementação, revisão e aprovação explícita do usuário |
+| 2 | PostgreSQL e persistência durável | em revisão | `feat/mvp-postgres` | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | revisão, testes e aprovação explícita do usuário |
 | 3 | Webhook GitHub vertical | pendente | `feat/mvp-github-webhook` | não aberto | Fase 2 aprovada |
 | 4 | Autenticação e API do produto | pendente | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
 | 5 | FCM, outbox e retry | pendente | `feat/mvp-fcm` | não aberto | Fase 4 aprovada |
@@ -65,7 +65,7 @@ Atualizar uma linha ao abrir, revisar, aprovar ou rejeitar cada PR. O relatório
 | ---: | --- | --- | --- | ---: | --- | --- | --- |
 | 0 | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | `docs/mvp-central-plan` | aprovada | 3 | `git diff --check`, `go test ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário | plano central criado, documentos antigos alinhados e Fase 1 liberada |
 | 1 | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | `feat/mvp-backend-foundation` | aprovada | 6 | `go test ./...`, `go test -race ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário em 2026-07-22 | configuração, composição explícita, evento GitHub normalizado, fila drenável e logging estruturado incorporados à `main` |
-| 2 | não aberto | `feat/mvp-postgres` | em andamento | 0 | ciclos TDD em preparação | pendente | PostgreSQL e persistência durável iniciados após aprovação da Fase 1 |
+| 2 | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | `feat/mvp-postgres` | em revisão | 3 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | pendente | schema completo, transação atômica, recuperação, retenção e entitlements Free entregues para revisão |
 
 Nenhuma linha pode ser marcada como `aprovada` sem a confirmação explícita do usuário. Quando um PR for reprovado ou exigir correções, manter o mesmo registro e anotar a nova rodada de testes.
 
