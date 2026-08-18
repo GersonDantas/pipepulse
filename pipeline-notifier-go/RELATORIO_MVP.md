@@ -46,7 +46,7 @@ Estados permitidos:
 | ---: | --- | --- | --- | --- | --- |
 | 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
 | 1 | Fundação Go | aprovada | `main` após merge | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | concluída |
-| 2 | PostgreSQL e persistência durável | em revisão | `feat/mvp-postgres` | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | revisão, testes e aprovação explícita do usuário |
+| 2 | PostgreSQL e persistência durável | em revisão | `feat/mvp-postgres` | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | concluida |
 | 3 | Webhook GitHub vertical | pendente | `feat/mvp-github-webhook` | não aberto | Fase 2 aprovada |
 | 4 | Autenticação e API do produto | pendente | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
 | 5 | FCM, outbox e retry | pendente | `feat/mvp-fcm` | não aberto | Fase 4 aprovada |
