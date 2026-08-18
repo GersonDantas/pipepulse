@@ -1,13 +1,16 @@
 # Arquitetura do PipePulse Backend
 
-O documento normativo do MVP é [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Este arquivo resume a arquitetura implementada até a Fase 2.
+O documento normativo do MVP é [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Este arquivo resume a arquitetura implementada até a Fase 3.
 
 ## Fluxo de dados
 
 ```text
 GitHub webhook
   -> handler Gin
-  -> service de normalização
+  -> limite de 1 MiB e headers obrigatórios
+  -> resolução do endpoint e segredo criptografado
+  -> HMAC SHA-256 sobre o corpo bruto
+  -> normalização e associação do workflow
   -> INSERT webhook_deliveries
   -> HTTP 202
   -> sinal de despertar
@@ -26,8 +29,8 @@ O sinal em memória não transporta o evento e não é fonte de verdade. Ele ape
 
 | Componente | Responsabilidade |
 | --- | --- |
-| Handler | adaptar HTTP e retornar o status apropriado |
-| Service | normalizar o payload externo em `models.Event` |
+| Handler | limitar e preservar o corpo bruto, validar headers e retornar o status apropriado |
+| Service | resolver o endpoint, validar HMAC, normalizar e associar o evento |
 | Queue | persistir antes de sinalizar e recuperar pendências |
 | Processor | decidir duplicidade semântica, ordem temporal, prioridade e criação de falha |
 | Repositório | executar leituras e escritas dentro da transação solicitada |
@@ -77,6 +80,10 @@ A migration inicial cria:
 
 As relações compostas impedem associar uma sessão a outro workspace, um dispositivo a outro usuário ou um workflow a outro repositório.
 
+## Fronteira do webhook
+
+Cada repositório possui um `endpoint_id` público e um segredo próprio armazenado com AES-256-GCM. A API aceita somente `workflow_run` com `X-GitHub-Delivery`, valida `X-Hub-Signature-256` em tempo constante e confirma que os IDs GitHub do payload pertencem ao endpoint e a um workflow ativo. Somente depois dessas verificações a entrega associada é gravada; o `202` confirma essa gravação, não o processamento assíncrono.
+
 ## Retenção
 
 - entregas processadas: 7 dias
@@ -92,4 +99,4 @@ O MVP executa um processor por instância. A transação usa isolamento serializ
 
 ## Próxima fase
 
-A Fase 3 adicionará o endpoint `POST /webhooks/github/{endpoint_id}`, segredo individual criptografado, HMAC SHA-256 sobre bytes originais, limite de 1 MiB, validação dos headers GitHub e associação obrigatória com repositório e workflow cadastrados.
+A Fase 4 adicionará OAuth GitHub com PKCE, workspace automático, sessões rotativas, bootstrap, cadastro de repositórios e workflows, limites Free, feed paginado, dispositivo e exclusão de conta.
