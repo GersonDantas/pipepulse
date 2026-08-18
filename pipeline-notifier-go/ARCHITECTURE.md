@@ -84,7 +84,7 @@ As relações compostas impedem associar uma sessão a outro workspace, um dispo
 - resultados terminais de push: 30 dias
 - entregas pendentes: nunca removidas pela rotina de retenção
 
-A referência da outbox para a falha aceita `NULL` após a retenção, enquanto uma chave UUID imutável preserva a idempotência da notificação durante 30 dias.
+A referência da outbox para a falha aceita `NULL` após a retenção, enquanto uma chave determinística formada por repositório, workflow run e tentativa preserva a idempotência da notificação durante 30 dias.
 
 ## Concorrência
 

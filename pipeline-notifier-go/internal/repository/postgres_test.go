@@ -152,6 +152,39 @@ func TestPostgresStoreDurabilityAndAtomicProcessing(t *testing.T) {
 		}
 	})
 
+	t.Run("retention preserves notification idempotency for the same run attempt", func(t *testing.T) {
+		truncate(t, ctx, pool)
+		repositoryID, workflowID := seedWorkspaceWithDevice(t, ctx, pool)
+		store := repository.NewPostgresStore(pool)
+		now := time.Date(2026, 7, 22, 15, 0, 0, 0, time.UTC)
+		event := workflowEvent("delivery-before-retention", models.PipelineStatusFailed, now.Add(-8*24*time.Hour))
+		event.Conclusion = "failure"
+		enqueueAndAssociate(t, ctx, pool, store, event, repositoryID, workflowID)
+
+		eventProcessor := processor.New(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err := eventProcessor.Process(ctx, event); err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE webhook_deliveries SET processed_at = $1`, event.Timestamp); err != nil {
+			t.Fatalf("age processed delivery: %v", err)
+		}
+		if _, err := store.Cleanup(ctx, now); err != nil {
+			t.Fatalf("Cleanup() error = %v", err)
+		}
+		assertCount(t, ctx, pool, "pipeline_failures", 0)
+		assertCount(t, ctx, pool, "notification_deliveries", 1)
+
+		repeated := event
+		repeated.DeliveryID = "delivery-after-retention"
+		repeated.Timestamp = event.Timestamp.Add(time.Minute)
+		enqueueAndAssociate(t, ctx, pool, store, repeated, repositoryID, workflowID)
+		if err := eventProcessor.Process(ctx, repeated); err != nil {
+			t.Fatalf("Process(repeated) error = %v", err)
+		}
+
+		assertCount(t, ctx, pool, "notification_deliveries", 1)
+	})
+
 	t.Run("retention removes only expired durable records", func(t *testing.T) {
 		truncate(t, ctx, pool)
 		repositoryID, workflowID := seedWorkspaceWithDevice(t, ctx, pool)

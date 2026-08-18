@@ -181,7 +181,7 @@ CREATE INDEX webhook_deliveries_processed_at_idx ON webhook_deliveries (processe
 CREATE TABLE notification_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_failure_id UUID REFERENCES pipeline_failures(id) ON DELETE SET NULL,
-    failure_deduplication_key UUID NOT NULL,
+    failure_deduplication_key TEXT NOT NULL,
     device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'abandoned')),
     attempt_count INTEGER NOT NULL DEFAULT 0,

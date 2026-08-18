@@ -290,12 +290,15 @@ func (transaction *postgresEventTransaction) CreateNotifications(ctx context.Con
 	}
 	result, err := transaction.tx.Exec(ctx, `
 		INSERT INTO notification_deliveries (pipeline_failure_id, failure_deduplication_key, device_id)
-		SELECT $1::uuid, $1::uuid, device.id
-		FROM repositories AS repository
+		SELECT failure.id,
+			concat_ws(':', failure.repository_id::text, failure.workflow_run_id::text, failure.run_attempt::text),
+			device.id
+		FROM pipeline_failures AS failure
+		JOIN repositories AS repository ON repository.id = failure.repository_id
 		JOIN devices AS device ON device.workspace_id = repository.workspace_id AND device.active
-		WHERE repository.id = $2
+		WHERE failure.id = $1
 		ON CONFLICT (failure_deduplication_key, device_id) DO NOTHING
-	`, failureID, transaction.repositoryID)
+	`, failureID)
 	if err != nil {
 		return 0, fmt.Errorf("create notification deliveries: %w", err)
 	}
