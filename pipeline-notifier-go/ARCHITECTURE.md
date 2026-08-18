@@ -1,304 +1,95 @@
-# Pipeline Notifier em Go
+# Arquitetura do PipePulse Backend
 
-> Estado: este arquivo documenta a arquitetura do prototipo atual em memoria. O plano central e a arquitetura alvo do MVP estao em [`RELATORIO_MVP.md`](./RELATORIO_MVP.md), que prevalece em caso de conflito.
+O documento normativo do MVP é [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Este arquivo resume a arquitetura implementada até a Fase 2.
 
-Guia de arquitetura e implementacao do prototipo inicial.
-
-Framework HTTP do MVP: `gin`.
-
-## Objetivo
-
-Construir um backend capaz de receber eventos de pipelines, processar esses eventos de forma assincrona e manter um estado consistente mesmo quando os eventos chegam duplicados ou fora de ordem.
-
-O sistema deve priorizar consistencia antes de performance e complexidade.
-
-## Visao Geral
-
-Fluxo principal:
+## Fluxo de dados
 
 ```text
-Webhook -> Handler -> Service -> Queue -> Processor -> Repository -> Notification
+GitHub webhook
+  -> handler Gin
+  -> service de normalização
+  -> INSERT webhook_deliveries
+  -> HTTP 202
+  -> sinal de despertar
+  -> worker consulta pendências
+  -> processor aplica regras
+  -> transação PostgreSQL
+       pipeline_states
+       pipeline_failures
+       notification_deliveries
+       webhook_deliveries.processed_at
 ```
 
-Responsabilidades:
+O sinal em memória não transporta o evento e não é fonte de verdade. Ele apenas reduz a latência normal. O worker também drena pendências na inicialização e em polling periódico.
 
-| Camada | Responsabilidade |
+## Fronteiras de responsabilidade
+
+| Componente | Responsabilidade |
 | --- | --- |
-| Handler | Recebe a requisicao HTTP com Gin e valida a estrutura de entrada |
-| Service | Converte o payload externo em um evento interno |
-| Queue | Desacopla a entrada HTTP do processamento |
-| Processor | Aplica regras de negocio e decide se o estado muda |
-| Repository | Armazena o ultimo estado valido do pipeline |
-| Notification | Notifica apenas quando houver mudanca relevante |
+| Handler | adaptar HTTP e retornar o status apropriado |
+| Service | normalizar o payload externo em `models.Event` |
+| Queue | persistir antes de sinalizar e recuperar pendências |
+| Processor | decidir duplicidade semântica, ordem temporal, prioridade e criação de falha |
+| Repositório | executar leituras e escritas dentro da transação solicitada |
+| Retention worker | remover dados expirados sem apagar entregas pendentes |
 
-## Conceitos Fundamentais
+O processor não executa SQL e o repositório não escolhe qual evento vence. Essa separação mantém as regras testáveis sem banco e as garantias atômicas testáveis contra PostgreSQL real.
 
-### Arquitetura orientada a eventos
+## Transação do processor
 
-O webhook nao processa regra de negocio diretamente. Ele recebe um evento externo, transforma esse dado em um evento interno e coloca esse evento em uma fila.
+Para cada entrega pendente:
 
-O processamento acontece depois, de forma assincrona, no processor.
+1. A entrega é bloqueada.
+2. O estado atual do workflow é lido com lock.
+3. O processor ignora evento antigo ou de menor prioridade, quando aplicável.
+4. Um evento aceito atualiza `pipeline_states`.
+5. Uma falha cria no máximo um registro por run e tentativa.
+6. A falha cria no máximo uma outbox por dispositivo ativo.
+7. A entrega é marcada como processada.
+8. Todas as alterações são confirmadas juntas.
 
-No MVP atual, o adaptador HTTP e implementado com Gin, mas a regra continua a mesma: o handler apenas valida e encaminha.
+Qualquer erro antes do commit desfaz estado, falha, outbox e conclusão da entrega. O polling poderá tentar a entrega novamente.
 
-### Desacoplamento
+## Idempotência e ordem
 
-A fila evita que o tempo de resposta do webhook dependa do processamento completo do pipeline.
+- `webhook_deliveries.delivery_id` é globalmente único.
+- Uma falha é única por repositório, workflow run e tentativa.
+- Uma notificação é única por falha e dispositivo, mesmo após a retenção remover a falha original.
+- Eventos com timestamp anterior ao estado são ignorados.
+- Em timestamps iguais, a prioridade é `failed > success > cancelled > running`.
+- Runs diferentes com falha geram falhas distintas, inclusive quando o estado anterior já era `failed`.
 
-No MVP, essa fila e um channel buffered:
+## Modelo persistente
 
-```go
-eventChannel := make(chan models.Event, 100)
-```
+A migration inicial cria:
 
-### Concorrencia em Go
+- `users`
+- `workspaces`
+- `oauth_requests`
+- `sessions`
+- `repositories`
+- `monitored_workflows`
+- `pipeline_states`
+- `pipeline_failures`
+- `devices`
+- `webhook_deliveries`
+- `notification_deliveries`
 
-O worker roda em uma goroutine:
+As relações compostas impedem associar uma sessão a outro workspace, um dispositivo a outro usuário ou um workflow a outro repositório.
 
-```go
-go func() {
-    for event := range eventChannel {
-        processor.ProcessEvent(event)
-    }
-}()
-```
+## Retenção
 
-No MVP, um worker unico mantem o processamento simples e deterministico. Um worker pool pode ser adicionado depois, desde que exista exclusao mutua por `PipelineID`.
+- entregas processadas: 7 dias
+- falhas do plano Free: 7 dias
+- resultados terminais de push: 30 dias
+- entregas pendentes: nunca removidas pela rotina de retenção
 
-## Modelo de Evento
+A referência da outbox para a falha aceita `NULL` após a retenção, enquanto uma chave determinística formada por repositório, workflow run e tentativa preserva a idempotência da notificação durante 30 dias.
 
-Evento interno minimo:
+## Concorrência
 
-```go
-type Event struct {
-    EventID    string
-    PipelineID string
-    Status     string
-    Timestamp  string
-}
-```
+O MVP executa um processor por instância. A transação usa isolamento serializável e locks das linhas de entrega e estado. Uma futura execução com vários workers exigirá claim com lease ou exclusão por workflow antes de aumentar o paralelismo.
 
-Esse modelo representa a entrada normalizada que o processor deve receber, independentemente da origem do webhook.
+## Próxima fase
 
-## Estado como Fonte da Verdade
-
-Estado minimo persistido:
-
-```go
-type State struct {
-    PipelineID  string
-    Status      string
-    Timestamp   string
-    LastEventID string
-}
-```
-
-O estado representa a ultima decisao valida do sistema para um pipeline.
-
-Regras:
-
-- O estado nunca deve regredir.
-- O estado deve ser atualizado antes de qualquer notificacao.
-- `Timestamp` deve ser tratado como fonte de verdade temporal.
-- `LastEventID` e usado para idempotencia.
-
-## Regras do Processor
-
-Ordem obrigatoria:
-
-1. Checar duplicidade por `EventID`.
-2. Validar se o timestamp do evento nao e antigo.
-3. Resolver conflito quando timestamps forem iguais.
-4. Atualizar o estado.
-5. Disparar notificacao se a mudanca for relevante.
-
-## Idempotencia
-
-Problema: o mesmo webhook pode ser entregue mais de uma vez.
-
-Regra:
-
-```go
-if current != nil && current.LastEventID == event.EventID {
-    return
-}
-```
-
-Resultado: eventos duplicados nao alteram o estado e nao geram notificacao.
-
-## Eventos Fora de Ordem
-
-Problema: a ordem de chegada dos webhooks nao e confiavel.
-
-Exemplo:
-
-```text
-10:00 -> failed
-09:59 -> running
-```
-
-Regra:
-
-```go
-if current != nil && event.Timestamp < current.Timestamp {
-    return
-}
-```
-
-Resultado: eventos antigos sao ignorados.
-
-No MVP, o timestamp pode ser comparado como string se estiver normalizado em RFC3339/UTC.
-
-## Conflito de Timestamp
-
-Problema: dois eventos podem chegar com o mesmo timestamp e status diferentes.
-
-Regra de prioridade:
-
-```text
-failed > success > running
-```
-
-Implementacao:
-
-```go
-func getPriority(status string) int {
-    switch status {
-    case "failed":
-        return 3
-    case "success":
-        return 2
-    case "running":
-        return 1
-    default:
-        return 0
-    }
-}
-```
-
-Se o novo evento tiver prioridade menor ou igual ao estado atual, ele deve ser ignorado.
-
-## Notificacoes
-
-Notificacoes nao devem ser disparadas para todo evento recebido.
-
-Regra:
-
-- `running -> running`: nao notifica.
-- `running -> failed`: notifica.
-- Evento duplicado: nao notifica.
-- Evento antigo: nao notifica.
-
-Importante: a notificacao deve acontecer somente depois de salvar o novo estado valido.
-
-## Concorrencia e Lock por Pipeline
-
-Com um worker unico, o MVP evita atualizacao paralela do mesmo pipeline.
-
-Se o sistema evoluir para multiplos workers, sera necessario usar lock por `PipelineID` para impedir duas atualizacoes simultaneas do mesmo estado.
-
-Exemplo de lock por chave:
-
-```go
-var locks = make(map[string]*sync.Mutex)
-var globalLock sync.Mutex
-
-func getLock(key string) *sync.Mutex {
-    globalLock.Lock()
-    defer globalLock.Unlock()
-
-    if locks[key] == nil {
-        locks[key] = &sync.Mutex{}
-    }
-
-    return locks[key]
-}
-```
-
-Uso:
-
-```go
-lock := getLock(event.PipelineID)
-lock.Lock()
-defer lock.Unlock()
-```
-
-Essa evolucao deve ser adicionada apenas quando houver mais de um worker processando eventos.
-
-## Testes Manuais
-
-### Evento simples
-
-```bash
-curl -X POST http://localhost:3000/webhook/github \
-  -H "Content-Type: application/json" \
-  -d '{
-    "workflow_run": {
-      "id": "123",
-      "conclusion": "failed",
-      "updated_at": "2026-01-01T10:00:00Z"
-    }
-  }'
-```
-
-Resultado esperado: estado atualizado e notificacao disparada.
-
-### Duplicidade
-
-Enviar o mesmo evento duas vezes.
-
-Resultado esperado:
-
-```text
-Evento duplicado
-```
-
-### Evento antigo
-
-Enviar um evento com timestamp menor que o estado atual.
-
-Resultado esperado:
-
-```text
-Evento antigo
-```
-
-### Conflito de timestamp
-
-Enviar dois eventos com o mesmo timestamp e status diferentes.
-
-Resultado esperado: o status de maior prioridade prevalece.
-
-## Aprendizados
-
-### Concorrencia precisa ser controlada
-
-Concorrencia sem regra de exclusao pode gerar estado incorreto. Concorrencia com chave de exclusao por pipeline permite escalar sem perder consistencia.
-
-### Ordem de chegada nao e fonte de verdade
-
-Eventos externos podem chegar duplicados, atrasados ou fora de ordem. O timestamp normalizado e o estado atual devem guiar a decisao.
-
-### Sistemas distribuidos precisam ser deterministicos
-
-O objetivo nao e descobrir a verdade absoluta do mundo externo. O objetivo e definir regras que sempre produzam a mesma decisao para o mesmo conjunto de eventos.
-
-### Go simplifica o MVP
-
-Channels e goroutines permitem criar uma fila e um worker assincrono sem dependencias externas no inicio do projeto.
-
-## Evolucao Futura
-
-Nao implementar no MVP sem necessidade real:
-
-- PostgreSQL para persistencia real.
-- Redis ou fila distribuida.
-- Worker pool com lock por pipeline.
-- Locks distribuidos.
-- Particionamento por pipeline.
-- Metricas e analytics.
-- Dashboard.
-
-## Regra de Ouro
-
-Consistencia nao e descobrir o que e certo. Consistencia e definir regras que nunca entram em contradicao.
+A Fase 3 adicionará o endpoint `POST /webhooks/github/{endpoint_id}`, segredo individual criptografado, HMAC SHA-256 sobre bytes originais, limite de 1 MiB, validação dos headers GitHub e associação obrigatória com repositório e workflow cadastrados.

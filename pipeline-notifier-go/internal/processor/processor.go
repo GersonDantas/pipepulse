@@ -2,98 +2,113 @@ package processor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/repository"
 )
 
-type Notifier interface {
-	Notify(context.Context, models.Event) error
-}
-
-type NotifierFunc func(context.Context, models.Event) error
-
-func (function NotifierFunc) Notify(ctx context.Context, event models.Event) error {
-	return function(ctx, event)
-}
-
 type Processor struct {
-	repository repository.StateRepository
-	notifier   Notifier
+	repository repository.ProcessingRepository
 	logger     *slog.Logger
 }
 
-func New(stateRepository repository.StateRepository, notifier Notifier, logger *slog.Logger) *Processor {
-	return &Processor{
-		repository: stateRepository,
-		notifier:   notifier,
-		logger:     logger,
-	}
+func New(processingRepository repository.ProcessingRepository, logger *slog.Logger) *Processor {
+	return &Processor{repository: processingRepository, logger: logger}
 }
 
-func (processor *Processor) Process(ctx context.Context, event models.Event) {
+func (processor *Processor) Process(ctx context.Context, event models.Event) error {
 	if err := ctx.Err(); err != nil {
-		processor.logger.Debug("event skipped because context is cancelled", "delivery_id", event.DeliveryID)
-		return
+		return err
 	}
 
-	pipelineID := event.PipelineKey()
-	current := processor.repository.GetState(pipelineID)
-
-	if current != nil && current.LastDeliveryID == event.DeliveryID {
-		processor.logger.Debug("duplicate delivery ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
-		return
+	transaction, err := processor.repository.BeginProcessing(ctx, event)
+	if errors.Is(err, repository.ErrDeliveryAlreadyProcessed) {
+		processor.logger.Debug("duplicate delivery ignored", "delivery_id", event.DeliveryID, "pipeline_id", event.PipelineKey())
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("begin processing delivery %s: %w", event.DeliveryID, err)
+	}
+	defer transaction.Rollback(context.Background())
 
+	current := transaction.CurrentState()
 	if current != nil && event.Timestamp.Before(current.Timestamp) {
-		processor.logger.Debug("older event ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
-		return
+		return processor.ignore(ctx, transaction, event, "older_event")
 	}
-
 	if current != nil && event.Timestamp.Equal(current.Timestamp) {
-		if event.Status.Priority() < current.Status.Priority() ||
-			(event.Status.Priority() == current.Status.Priority() &&
-				event.WorkflowRunID == current.WorkflowRunID && event.RunAttempt == current.RunAttempt) {
-			processor.logger.Debug("equal timestamp event with lower priority or same run ignored", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID)
-			return
+		if event.Status.Priority() < current.Status.Priority() {
+			return processor.ignore(ctx, transaction, event, "lower_priority")
+		}
+		if event.Status.Priority() == current.Status.Priority() &&
+			event.WorkflowRunID == current.WorkflowRunID && event.RunAttempt == current.RunAttempt {
+			return processor.ignore(ctx, transaction, event, "duplicate_run_state")
 		}
 	}
 
-	processor.repository.SaveState(repository.State{
-		PipelineID:     pipelineID,
+	state := repository.State{
+		PipelineID:     event.PipelineKey(),
 		RepositoryID:   event.RepositoryID,
 		WorkflowID:     event.WorkflowID,
 		WorkflowRunID:  event.WorkflowRunID,
 		RunAttempt:     event.RunAttempt,
 		Status:         event.Status,
 		Conclusion:     event.Conclusion,
-		Timestamp:      event.Timestamp,
+		Timestamp:      event.Timestamp.UTC(),
 		LastDeliveryID: event.DeliveryID,
-	})
+	}
+	if err := transaction.SaveState(ctx, state); err != nil {
+		return fmt.Errorf("save pipeline state: %w", err)
+	}
 
-	processor.logger.Info("pipeline state updated", "delivery_id", event.DeliveryID, "pipeline_id", pipelineID, "status", event.Status)
-
-	if processor.shouldNotify(current, event) {
-		if err := processor.notifier.Notify(ctx, event); err != nil {
-			processor.logger.Error("notification failed", "delivery_id", event.DeliveryID, "error", err)
+	failureCreated := false
+	notificationCount := int64(0)
+	if event.Status == models.PipelineStatusFailed {
+		failureID, created, err := transaction.CreateFailure(ctx, event)
+		if err != nil {
+			return fmt.Errorf("create pipeline failure: %w", err)
+		}
+		failureCreated = created
+		if created {
+			notificationCount, err = transaction.CreateNotifications(ctx, failureID)
+			if err != nil {
+				return fmt.Errorf("create notification outbox: %w", err)
+			}
 		}
 	}
+
+	if err := transaction.CompleteDelivery(ctx, ""); err != nil {
+		return err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return err
+	}
+
+	processor.logger.Info(
+		"pipeline event processed",
+		"delivery_id", event.DeliveryID,
+		"pipeline_id", event.PipelineKey(),
+		"status", event.Status,
+		"failure_created", failureCreated,
+		"notifications_created", notificationCount,
+	)
+	return nil
 }
 
-func (processor *Processor) shouldNotify(current *repository.State, event models.Event) bool {
-	if event.Status != models.PipelineStatusFailed {
-		return false
+func (processor *Processor) ignore(ctx context.Context, transaction repository.EventTransaction, event models.Event, reason string) error {
+	if err := transaction.CompleteDelivery(ctx, reason); err != nil {
+		return err
 	}
-	if current == nil {
-		return true
+	if err := transaction.Commit(ctx); err != nil {
+		return err
 	}
-	return current.WorkflowRunID != event.WorkflowRunID || current.RunAttempt != event.RunAttempt
-}
-
-func NewLogNotifier(logger *slog.Logger) Notifier {
-	return NotifierFunc(func(_ context.Context, event models.Event) error {
-		logger.Info("notification queued for future delivery", "delivery_id", event.DeliveryID, "workflow_run_id", event.WorkflowRunID, "status", event.Status)
-		return nil
-	})
+	processor.logger.Debug(
+		"pipeline event ignored",
+		"delivery_id", event.DeliveryID,
+		"pipeline_id", event.PipelineKey(),
+		"reason", reason,
+	)
+	return nil
 }

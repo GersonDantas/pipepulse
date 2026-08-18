@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -19,9 +20,13 @@ type State struct {
 	LastDeliveryID string                `json:"last_delivery_id"`
 }
 
+type StateReader interface {
+	GetState(context.Context, string) (*State, error)
+}
+
 type StateRepository interface {
-	GetState(pipelineID string) *State
-	SaveState(state State)
+	StateReader
+	SaveState(context.Context, State) error
 }
 
 type MemoryStateRepository struct {
@@ -33,20 +38,21 @@ func NewMemoryStateRepository() *MemoryStateRepository {
 	return &MemoryStateRepository{states: make(map[string]State)}
 }
 
-func (repository *MemoryStateRepository) GetState(pipelineID string) *State {
+func (repository *MemoryStateRepository) GetState(_ context.Context, pipelineID string) (*State, error) {
 	repository.mu.RLock()
 	defer repository.mu.RUnlock()
 
 	state, ok := repository.states[pipelineID]
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return &state
+	return &state, nil
 }
 
-func (repository *MemoryStateRepository) SaveState(state State) {
+func (repository *MemoryStateRepository) SaveState(_ context.Context, state State) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 
 	repository.states[state.PipelineID] = state
+	return nil
 }

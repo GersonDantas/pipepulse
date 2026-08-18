@@ -7,6 +7,7 @@ import (
 )
 
 func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://pipepulse:secret@localhost:5432/pipepulse")
 	t.Setenv("PORT", "8081")
 	t.Setenv("ENVIRONMENT", "test")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -14,7 +15,8 @@ func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 	t.Setenv("HTTP_WRITE_TIMEOUT", "4s")
 	t.Setenv("HTTP_IDLE_TIMEOUT", "5s")
 	t.Setenv("SHUTDOWN_TIMEOUT", "6s")
-	t.Setenv("QUEUE_SIZE", "42")
+	t.Setenv("WORKER_POLL_INTERVAL", "250ms")
+	t.Setenv("RETENTION_INTERVAL", "12h")
 
 	configuration, err := Load()
 	if err != nil {
@@ -23,6 +25,9 @@ func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 
 	if configuration.Port != "8081" {
 		t.Fatalf("Port = %q, want %q", configuration.Port, "8081")
+	}
+	if configuration.DatabaseURL != "postgres://pipepulse:secret@localhost:5432/pipepulse" {
+		t.Fatalf("DatabaseURL = %q, want configured PostgreSQL URL", configuration.DatabaseURL)
 	}
 	if configuration.Environment != "test" {
 		t.Fatalf("Environment = %q, want %q", configuration.Environment, "test")
@@ -42,15 +47,27 @@ func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 	if configuration.ShutdownTimeout != 6*time.Second {
 		t.Fatalf("ShutdownTimeout = %s, want 6s", configuration.ShutdownTimeout)
 	}
-	if configuration.QueueSize != 42 {
-		t.Fatalf("QueueSize = %d, want 42", configuration.QueueSize)
+	if configuration.WorkerPollInterval != 250*time.Millisecond {
+		t.Fatalf("WorkerPollInterval = %s, want 250ms", configuration.WorkerPollInterval)
+	}
+	if configuration.RetentionInterval != 12*time.Hour {
+		t.Fatalf("RetentionInterval = %s, want 12h", configuration.RetentionInterval)
 	}
 }
 
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://pipepulse:secret@localhost:5432/pipepulse")
 	t.Setenv("HTTP_WRITE_TIMEOUT", "not-a-duration")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want error")
+	}
+}
+
+func TestLoadRequiresDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want missing DATABASE_URL error")
 	}
 }
