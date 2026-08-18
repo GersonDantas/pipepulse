@@ -17,6 +17,7 @@ import (
 	"pipeline-notifier/internal/repository"
 	"pipeline-notifier/internal/retention"
 	internalRouter "pipeline-notifier/internal/router"
+	"pipeline-notifier/internal/secrets"
 	"pipeline-notifier/internal/services"
 )
 
@@ -45,12 +46,17 @@ func main() {
 	defer pool.Close()
 
 	store := repository.NewPostgresStore(pool)
+	secretBox, err := secrets.NewBox(configuration.DataEncryptionKey)
+	if err != nil {
+		logger.Error("webhook secret encryption unavailable", "error", err)
+		os.Exit(1)
+	}
 	eventProcessor := processor.New(store, logger)
 	eventQueue := queue.New(store, configuration.WorkerPollInterval, logger)
 	eventQueue.Start(eventProcessor)
 	retentionDone := retention.New(store, configuration.RetentionInterval, logger).Start(runtimeContext)
 
-	webhookService := services.NewWebhookService(eventQueue)
+	webhookService := services.NewWebhookService(eventQueue, store, secretBox)
 	handler := handlers.New(webhookService, store, logger)
 	server := &http.Server{
 		Addr:              ":" + configuration.Port,
