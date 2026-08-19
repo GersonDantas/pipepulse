@@ -3,10 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 
-	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/repository"
 	"pipeline-notifier/internal/services"
 
@@ -14,8 +14,10 @@ import (
 )
 
 type WorkflowRunService interface {
-	Handle(context.Context, string, models.GithubWebhookPayload) error
+	Handle(context.Context, services.WebhookRequest) error
 }
+
+const maxWebhookBodyBytes = 1 << 20
 
 type Handler struct {
 	service    WorkflowRunService
@@ -38,33 +40,48 @@ func (handler *Handler) GithubWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing delivery id"})
 		return
 	}
+	if c.GetHeader("X-GitHub-Event") != "workflow_run" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported GitHub event"})
+		return
+	}
 
-	var payload models.GithubWebhookPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxWebhookBodyBytes)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "payload too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 		return
 	}
 
-	if err := handler.service.Handle(c.Request.Context(), deliveryID, payload); err != nil {
+	err = handler.service.Handle(c.Request.Context(), services.WebhookRequest{
+		EndpointID: c.Param("endpoint_id"),
+		DeliveryID: deliveryID,
+		Signature:  c.GetHeader("X-Hub-Signature-256"),
+		Body:       body,
+	})
+	if err != nil {
 		handler.logger.Error("webhook handling failed", "delivery_id", deliveryID, "error", err)
 
-		if errors.Is(err, services.ErrInvalidTimestamp) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid timestamp"})
-			return
-		}
-		if errors.Is(err, services.ErrInvalidStatus) {
+		switch {
+		case errors.Is(err, services.ErrInvalidSignature):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+		case errors.Is(err, services.ErrWebhookEndpointNotFound), errors.Is(err, services.ErrMonitoredWorkflowNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "webhook endpoint not found"})
+		case errors.Is(err, services.ErrInvalidPayload), errors.Is(err, services.ErrInvalidTimestamp):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		case errors.Is(err, services.ErrInvalidStatus), errors.Is(err, services.ErrRepositoryMismatch):
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"error":   "invalid workflow status",
-				"allowed": []string{"running", "success", "cancelled", "failed"},
+				"error": "invalid workflow run",
 			})
-			return
-		}
-		if errors.Is(err, services.ErrQueueUnavailable) {
+		case errors.Is(err, services.ErrQueueUnavailable):
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "event queue unavailable"})
-			return
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
 		}
-
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "error"})
 		return
 	}
 

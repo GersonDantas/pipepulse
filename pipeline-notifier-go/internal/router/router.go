@@ -19,7 +19,7 @@ func SetupRouter(handler *handlers.Handler, logger *slog.Logger) *gin.Engine {
 	}))
 
 	router.GET("/health", handler.HealthCheck)
-	router.POST("/webhook/github", handler.GithubWebhook)
+	router.POST("/webhooks/github/:endpoint_id", handler.GithubWebhook)
 	router.GET("/pipelines/:id", handler.GetPipelineState)
 
 	return router

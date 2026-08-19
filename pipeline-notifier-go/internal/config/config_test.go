@@ -1,13 +1,19 @@
 package config
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"testing"
 	"time"
 )
 
+func encryptionKey() string {
+	return base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+}
+
 func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://pipepulse:secret@localhost:5432/pipepulse")
+	t.Setenv("DATA_ENCRYPTION_KEY", encryptionKey())
 	t.Setenv("PORT", "8081")
 	t.Setenv("ENVIRONMENT", "test")
 	t.Setenv("LOG_LEVEL", "debug")
@@ -28,6 +34,9 @@ func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 	}
 	if configuration.DatabaseURL != "postgres://pipepulse:secret@localhost:5432/pipepulse" {
 		t.Fatalf("DatabaseURL = %q, want configured PostgreSQL URL", configuration.DatabaseURL)
+	}
+	if string(configuration.DataEncryptionKey) != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("DataEncryptionKey = %q, want decoded 32-byte key", configuration.DataEncryptionKey)
 	}
 	if configuration.Environment != "test" {
 		t.Fatalf("Environment = %q, want %q", configuration.Environment, "test")
@@ -57,6 +66,7 @@ func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
 
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://pipepulse:secret@localhost:5432/pipepulse")
+	t.Setenv("DATA_ENCRYPTION_KEY", encryptionKey())
 	t.Setenv("HTTP_WRITE_TIMEOUT", "not-a-duration")
 
 	if _, err := Load(); err == nil {
@@ -69,5 +79,18 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want missing DATABASE_URL error")
+	}
+}
+
+func TestLoadRequiresValidDataEncryptionKey(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://pipepulse:secret@localhost:5432/pipepulse")
+
+	for _, value := range []string{"", "not-base64", base64.StdEncoding.EncodeToString([]byte("too-short"))} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("DATA_ENCRYPTION_KEY", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid DATA_ENCRYPTION_KEY error")
+			}
+		})
 	}
 }

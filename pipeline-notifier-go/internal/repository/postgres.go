@@ -23,13 +23,22 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 func (store *PostgresStore) Enqueue(ctx context.Context, event models.Event) (bool, error) {
+	var repositoryID, workflowID any
+	if event.RepositoryRecordID != "" || event.MonitoredWorkflowID != "" {
+		if event.RepositoryRecordID == "" || event.MonitoredWorkflowID == "" {
+			return false, errors.New("webhook delivery association is incomplete")
+		}
+		repositoryID = event.RepositoryRecordID
+		workflowID = event.MonitoredWorkflowID
+	}
 	result, err := store.pool.Exec(ctx, `
 		INSERT INTO webhook_deliveries (
-			delivery_id, github_repository_id, github_workflow_id, workflow_run_id,
-			run_attempt, status, conclusion, event_timestamp, branch, head_sha, run_url
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			delivery_id, repository_id, monitored_workflow_id, github_repository_id,
+			github_workflow_id, workflow_run_id, run_attempt, status, conclusion,
+			event_timestamp, branch, head_sha, run_url
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (delivery_id) DO NOTHING
-	`, event.DeliveryID, event.RepositoryID, event.WorkflowID, event.WorkflowRunID,
+	`, event.DeliveryID, repositoryID, workflowID, event.RepositoryID, event.WorkflowID, event.WorkflowRunID,
 		event.RunAttempt, event.Status, event.Conclusion, event.Timestamp, event.Branch, event.SHA, event.RunURL)
 	if err != nil {
 		return false, fmt.Errorf("persist webhook delivery: %w", err)

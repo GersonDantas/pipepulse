@@ -8,6 +8,8 @@ O plano central, o escopo do produto e a ordem das fases estão em [`RELATORIO_M
 
 ```text
 Webhook
+  -> limite, headers e HMAC SHA-256
+  -> associação por endpoint, repositório e workflow
   -> normalização do evento
   -> PostgreSQL: webhook_deliveries
   -> sinal não durável para o worker
@@ -21,7 +23,7 @@ O processor aplica as regras de negócio. O repositório PostgreSQL abre a trans
 
 ## Pré-requisitos
 
-- Go 1.25.12 ou compatível
+- Go 1.25.13 ou compatível
 - PostgreSQL 16 ou compatível
 - Docker ou outro runtime de contêiner somente para os testes de integração locais
 
@@ -38,11 +40,12 @@ docker run --rm --name pipepulse-postgres \
 
 ## Configuração
 
-`DATABASE_URL` é obrigatória. As demais configurações abaixo possuem os valores padrão indicados.
+`DATABASE_URL` e `DATA_ENCRYPTION_KEY` são obrigatórias. As demais configurações abaixo possuem os valores padrão indicados.
 
 | Variável | Padrão | Finalidade |
 | --- | --- | --- |
 | `DATABASE_URL` | sem padrão | conexão PostgreSQL |
+| `DATA_ENCRYPTION_KEY` | sem padrão | chave AES-256 em base64 para os segredos armazenados |
 | `PORT` | `3000` | porta HTTP |
 | `ENVIRONMENT` | `development` | identificação do ambiente |
 | `LOG_LEVEL` | `info` | nível dos logs JSON |
@@ -56,24 +59,26 @@ As migrations Goose estão embutidas no binário e são aplicadas antes da abert
 
 ```bash
 export DATABASE_URL='postgres://pipepulse:pipepulse@localhost:5432/pipepulse?sslmode=disable'
+export DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 go run ./cmd/api
 ```
 
 A API fica disponível em `http://localhost:3000` por padrão.
 
-## Endpoint provisório do webhook
+## Endpoint do webhook GitHub
 
 ```text
-POST /webhook/github
+POST /webhooks/github/{endpoint_id}
 ```
 
 Exemplo:
 
 ```bash
-curl -i http://localhost:3000/webhook/github \
+curl -i http://localhost:3000/webhooks/github/00000000-0000-0000-0000-000000000000 \
   -H 'Content-Type: application/json' \
-  -H 'X-Hub-Signature-256: sha256=provisorio' \
+  -H 'X-Hub-Signature-256: sha256=<hmac-hex-do-corpo>' \
   -H 'X-GitHub-Delivery: delivery-1' \
+  -H 'X-GitHub-Event: workflow_run' \
   --data '{
     "repository": {"id": 10},
     "workflow_run": {
@@ -90,7 +95,7 @@ curl -i http://localhost:3000/webhook/github \
   }'
 ```
 
-O endpoint por repositório, o limite de corpo, a validação HMAC real e a associação segura por `endpoint_id` pertencem à Fase 3. Nesta fase, o header de assinatura ainda é apenas obrigatório.
+O HMAC é calculado com SHA-256 sobre os bytes exatos do corpo e o segredo individual do repositório. Corpos maiores que 1 MiB, assinaturas inválidas, outros tipos de evento e workflows não cadastrados são rejeitados antes da persistência.
 
 ## Testes
 
@@ -105,12 +110,12 @@ go vet ./...
 Migrations, transações, rollback, recuperação e retenção contra PostgreSQL efêmero:
 
 ```bash
-PIPEPULSE_INTEGRATION=1 go test ./internal/database ./internal/repository -count=1
+PIPEPULSE_INTEGRATION=1 go test ./internal/database ./internal/repository ./internal/handlers -count=1
 ```
 
 ## Estado da implementação
 
-Concluído na Fase 2:
+Concluído até a Fase 3:
 
 - pool PostgreSQL com `pgxpool`
 - schema completo do MVP em migration Goose embutida
@@ -119,10 +124,14 @@ Concluído na Fase 2:
 - recuperação de entregas pendentes após reinício
 - retenção de entregas, falhas Free e resultados de push
 - `plan_code=free` e contrato de entitlements
+- endpoint individual `POST /webhooks/github/{endpoint_id}`
+- segredo criptografado com AES-256-GCM e HMAC SHA-256 em tempo constante
+- limite de corpo de 1 MiB e validação dos headers GitHub
+- associação obrigatória da entrega com repositório e workflow ativos
+- processamento vertical da entrega até estado e feed de falhas
 
 Ainda fora do escopo desta fase:
 
-- endpoint por repositório e HMAC real
 - autenticação GitHub e isolamento HTTP por workspace
 - sender FCM e política de retry
 - aplicativo Flutter

@@ -11,15 +11,15 @@ import (
 	"testing"
 
 	"pipeline-notifier/internal/handlers"
-	"pipeline-notifier/internal/models"
 	"pipeline-notifier/internal/repository"
+	"pipeline-notifier/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
 
 type fakeService struct{}
 
-func (fakeService) Handle(context.Context, string, models.GithubWebhookPayload) error {
+func (fakeService) Handle(context.Context, services.WebhookRequest) error {
 	return nil
 }
 

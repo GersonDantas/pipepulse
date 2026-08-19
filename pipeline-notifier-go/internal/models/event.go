@@ -12,17 +12,19 @@ var ErrInvalidWorkflowRun = errors.New("invalid workflow run")
 var ErrInvalidEventTimestamp = errors.New("invalid event timestamp")
 
 type Event struct {
-	DeliveryID    string
-	RepositoryID  int64
-	WorkflowID    int64
-	WorkflowRunID int64
-	RunAttempt    int
-	Status        PipelineStatus
-	Conclusion    string
-	Timestamp     time.Time
-	Branch        string
-	SHA           string
-	RunURL        string
+	DeliveryID          string
+	RepositoryID        int64
+	WorkflowID          int64
+	WorkflowRunID       int64
+	RunAttempt          int
+	Status              PipelineStatus
+	Conclusion          string
+	Timestamp           time.Time
+	Branch              string
+	SHA                 string
+	RunURL              string
+	RepositoryRecordID  string
+	MonitoredWorkflowID string
 }
 
 func NewWorkflowRunEvent(deliveryID string, payload GithubWebhookPayload) (Event, error) {

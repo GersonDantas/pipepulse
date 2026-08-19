@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,6 +24,7 @@ const (
 type Config struct {
 	Port               string
 	DatabaseURL        string
+	DataEncryptionKey  []byte
 	Environment        string
 	LogLevel           slog.Level
 	ReadHeaderTimeout  time.Duration
@@ -35,6 +37,10 @@ type Config struct {
 
 func Load() (Config, error) {
 	databaseURL, err := requiredEnv("DATABASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	dataEncryptionKey, err := encryptionKeyFromEnv()
 	if err != nil {
 		return Config{}, err
 	}
@@ -72,6 +78,7 @@ func Load() (Config, error) {
 	return Config{
 		Port:               envOrDefault("PORT", defaultPort),
 		DatabaseURL:        databaseURL,
+		DataEncryptionKey:  dataEncryptionKey,
 		Environment:        envOrDefault("ENVIRONMENT", defaultEnvironment),
 		LogLevel:           logLevel,
 		ReadHeaderTimeout:  readHeaderTimeout,
@@ -81,6 +88,18 @@ func Load() (Config, error) {
 		WorkerPollInterval: workerPollInterval,
 		RetentionInterval:  retentionInterval,
 	}, nil
+}
+
+func encryptionKeyFromEnv() ([]byte, error) {
+	value, err := requiredEnv("DATA_ENCRYPTION_KEY")
+	if err != nil {
+		return nil, err
+	}
+	key, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("DATA_ENCRYPTION_KEY must be a base64-encoded 32-byte key")
+	}
+	return key, nil
 }
 
 func requiredEnv(key string) (string, error) {
