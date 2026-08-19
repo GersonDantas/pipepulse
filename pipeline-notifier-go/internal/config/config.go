@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,17 +23,21 @@ const (
 )
 
 type Config struct {
-	Port               string
-	DatabaseURL        string
-	DataEncryptionKey  []byte
-	Environment        string
-	LogLevel           slog.Level
-	ReadHeaderTimeout  time.Duration
-	WriteTimeout       time.Duration
-	IdleTimeout        time.Duration
-	ShutdownTimeout    time.Duration
-	WorkerPollInterval time.Duration
-	RetentionInterval  time.Duration
+	Port                   string
+	DatabaseURL            string
+	DataEncryptionKey      []byte
+	AppBaseURL             string
+	GithubClientID         string
+	GithubClientSecret     string
+	MobileOAuthRedirectURI string
+	Environment            string
+	LogLevel               slog.Level
+	ReadHeaderTimeout      time.Duration
+	WriteTimeout           time.Duration
+	IdleTimeout            time.Duration
+	ShutdownTimeout        time.Duration
+	WorkerPollInterval     time.Duration
+	RetentionInterval      time.Duration
 }
 
 func Load() (Config, error) {
@@ -41,6 +46,22 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	dataEncryptionKey, err := encryptionKeyFromEnv()
+	if err != nil {
+		return Config{}, err
+	}
+	appBaseURL, err := requiredAbsoluteURL("APP_BASE_URL", true)
+	if err != nil {
+		return Config{}, err
+	}
+	githubClientID, err := requiredEnv("GITHUB_CLIENT_ID")
+	if err != nil {
+		return Config{}, err
+	}
+	githubClientSecret, err := requiredEnv("GITHUB_CLIENT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	mobileOAuthRedirectURI, err := requiredAbsoluteURL("MOBILE_OAUTH_REDIRECT_URI", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -76,18 +97,37 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Port:               envOrDefault("PORT", defaultPort),
-		DatabaseURL:        databaseURL,
-		DataEncryptionKey:  dataEncryptionKey,
-		Environment:        envOrDefault("ENVIRONMENT", defaultEnvironment),
-		LogLevel:           logLevel,
-		ReadHeaderTimeout:  readHeaderTimeout,
-		WriteTimeout:       writeTimeout,
-		IdleTimeout:        idleTimeout,
-		ShutdownTimeout:    shutdownTimeout,
-		WorkerPollInterval: workerPollInterval,
-		RetentionInterval:  retentionInterval,
+		Port:                   envOrDefault("PORT", defaultPort),
+		DatabaseURL:            databaseURL,
+		DataEncryptionKey:      dataEncryptionKey,
+		AppBaseURL:             strings.TrimRight(appBaseURL, "/"),
+		GithubClientID:         githubClientID,
+		GithubClientSecret:     githubClientSecret,
+		MobileOAuthRedirectURI: mobileOAuthRedirectURI,
+		Environment:            envOrDefault("ENVIRONMENT", defaultEnvironment),
+		LogLevel:               logLevel,
+		ReadHeaderTimeout:      readHeaderTimeout,
+		WriteTimeout:           writeTimeout,
+		IdleTimeout:            idleTimeout,
+		ShutdownTimeout:        shutdownTimeout,
+		WorkerPollInterval:     workerPollInterval,
+		RetentionInterval:      retentionInterval,
 	}, nil
+}
+
+func requiredAbsoluteURL(key string, webOnly bool) (string, error) {
+	value, err := requiredEnv(key)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" {
+		return "", fmt.Errorf("%s must be an absolute URL", key)
+	}
+	if webOnly && (parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http")) {
+		return "", fmt.Errorf("%s must be an HTTP(S) URL", key)
+	}
+	return value, nil
 }
 
 func encryptionKeyFromEnv() ([]byte, error) {
