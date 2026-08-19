@@ -47,8 +47,8 @@ Estados permitidos:
 | 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
 | 1 | Fundação Go | aprovada | `main` após merge | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | concluída |
 | 2 | PostgreSQL e persistência durável | aprovada | `main` após merge | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | concluída |
-| 3 | Webhook GitHub vertical | aprovada | `feat/mvp-github-webhook` | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | concluída |
-| 4 | Autenticação e API do produto | pendente | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
+| 3 | Webhook GitHub vertical | aprovada | `main` após merge | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | concluída |
+| 4 | Autenticação e API do produto | em andamento | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
 | 5 | FCM, outbox e retry | pendente | `feat/mvp-fcm` | não aberto | Fase 4 aprovada |
 | 6 | Aplicativo Flutter Android/iOS | pendente | `feat/mvp-flutter-app` | não aberto | Fases 4 e 5 aprovadas |
 | 7 | Operação privada e alpha | pendente | `chore/mvp-private-alpha-release` | não aberto | Fases 1 a 6 aprovadas |

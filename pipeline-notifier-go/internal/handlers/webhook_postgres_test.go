@@ -55,7 +55,7 @@ func TestGithubWebhookPersistsBeforeAcceptedAndProcessesToFeed(t *testing.T) {
 	eventQueue := queue.New(store, time.Hour, logger)
 	service := services.NewWebhookService(eventQueue, store, secretBox)
 	handler := handlers.New(service, store, logger)
-	httpRouter := router.SetupRouter(handler, logger)
+	httpRouter := router.SetupRouter(handler, nil, nil, logger)
 	body := `{"repository":{"id":10},"workflow_run":{"id":20,"workflow_id":30,"run_attempt":1,"status":"completed","conclusion":"failure","updated_at":"2026-08-18T18:00:00Z","head_branch":"main","head_sha":"abc123","html_url":"https://github.com/acme/api/actions/runs/20"}}`
 
 	invalid := signedWebhookRequest(endpointID, "delivery-invalid", body, []byte("wrong-secret"))

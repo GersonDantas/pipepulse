@@ -1,6 +1,6 @@
 # Arquitetura do PipePulse Backend
 
-O documento normativo do MVP é [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Este arquivo resume a arquitetura implementada até a Fase 3.
+O documento normativo do MVP é [`RELATORIO_MVP.md`](./RELATORIO_MVP.md). Este arquivo resume a arquitetura implementada até a Fase 4.
 
 ## Fluxo de dados
 
@@ -35,6 +35,8 @@ O sinal em memória não transporta o evento e não é fonte de verdade. Ele ape
 | Processor | decidir duplicidade semântica, ordem temporal, prioridade e criação de falha |
 | Repositório | executar leituras e escritas dentro da transação solicitada |
 | Retention worker | remover dados expirados sem apagar entregas pendentes |
+| Auth service | executar PKCE, código de troca e emissão/rotação de tokens opacos |
+| Product service | validar entradas, aplicar entitlements e emitir segredos de uso único |
 
 O processor não executa SQL e o repositório não escolhe qual evento vence. Essa separação mantém as regras testáveis sem banco e as garantias atômicas testáveis contra PostgreSQL real.
 
@@ -80,6 +82,20 @@ A migration inicial cria:
 
 As relações compostas impedem associar uma sessão a outro workspace, um dispositivo a outro usuário ou um workflow a outro repositório.
 
+## Autenticação e isolamento
+
+O backend cria `state` e verifier PKCE aleatórios, persiste apenas o hash do `state` e mantém o verifier criptografado. O callback consome o `state` uma única vez, usa o token GitHub somente para consultar `/user` e entrega ao deep link móvel outro código de uso único. O consumo desse código, o upsert de usuário/workspace e a criação da sessão ocorrem na mesma transação.
+
+Access e refresh tokens são valores opacos aleatórios; somente hashes SHA-256 ficam no banco. O access token expira em 15 minutos. O refresh expira em 30 dias e sua rotação substitui atomicamente ambos os hashes. Logout revoga a sessão e a exclusão do usuário remove por cascata workspace, sessões, dispositivo e endpoints.
+
+Todas as rotas de produto usam o workspace obtido da sessão. Consultas e mutações incluem esse workspace no SQL; IDs pertencentes a outro workspace são indistinguíveis de IDs inexistentes e retornam `404`.
+
+## API do produto
+
+O limite Free de três repositórios é verificado dentro de uma transação que bloqueia o workspace, evitando ultrapassagem por requisições concorrentes. Criação e rotação retornam o segredo do webhook somente na resposta atual. Listagens nunca leem nem devolvem o segredo criptografado.
+
+O feed usa cursor opaco composto por timestamp e UUID, ordenado de forma determinística. O registro de dispositivo substitui o dispositivo ativo anterior do usuário e rejeita um token já associado a outra conta.
+
 ## Fronteira do webhook
 
 Cada repositório possui um `endpoint_id` público e um segredo próprio armazenado com AES-256-GCM. A API aceita somente `workflow_run` com `X-GitHub-Delivery`, valida `X-Hub-Signature-256` em tempo constante e confirma que os IDs GitHub do payload pertencem ao endpoint e a um workflow ativo. Somente depois dessas verificações a entrega associada é gravada; o `202` confirma essa gravação, não o processamento assíncrono.
@@ -99,4 +115,4 @@ O MVP executa um processor por instância. A transação usa isolamento serializ
 
 ## Próxima fase
 
-A Fase 4 adicionará OAuth GitHub com PKCE, workspace automático, sessões rotativas, bootstrap, cadastro de repositórios e workflows, limites Free, feed paginado, dispositivo e exclusão de conta.
+A Fase 5 adicionará sender FCM, retry, idempotência e tratamento de tokens inválidos sobre a outbox já persistida.

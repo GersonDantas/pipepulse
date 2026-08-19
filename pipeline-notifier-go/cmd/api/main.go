@@ -57,10 +57,20 @@ func main() {
 	retentionDone := retention.New(store, configuration.RetentionInterval, logger).Start(runtimeContext)
 
 	webhookService := services.NewWebhookService(eventQueue, store, secretBox)
+	callbackURL := configuration.AppBaseURL + "/v1/auth/github/callback"
+	githubClient := services.NewGithubClient(&http.Client{Timeout: configuration.WriteTimeout}, configuration.GithubClientID, configuration.GithubClientSecret, callbackURL)
+	authService := services.NewAuthService(store, githubClient, secretBox, services.AuthConfig{
+		GithubClientID:    configuration.GithubClientID,
+		CallbackURL:       callbackURL,
+		MobileRedirectURI: configuration.MobileOAuthRedirectURI,
+	})
+	productService := services.NewProductService(store, secretBox, configuration.AppBaseURL)
 	handler := handlers.New(webhookService, store, logger)
+	authHandler := handlers.NewAuth(authService, logger)
+	productHandler := handlers.NewProduct(productService, logger)
 	server := &http.Server{
 		Addr:              ":" + configuration.Port,
-		Handler:           internalRouter.SetupRouter(handler, logger),
+		Handler:           internalRouter.SetupRouter(handler, authHandler, productHandler, logger),
 		ReadHeaderTimeout: configuration.ReadHeaderTimeout,
 		WriteTimeout:      configuration.WriteTimeout,
 		IdleTimeout:       configuration.IdleTimeout,
