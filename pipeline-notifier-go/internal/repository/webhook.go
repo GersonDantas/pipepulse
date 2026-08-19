@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var ErrWebhookEndpointNotFound = errors.New("webhook endpoint not found")
@@ -18,12 +19,17 @@ type WebhookEndpoint struct {
 }
 
 func (store *PostgresStore) GetWebhookEndpoint(ctx context.Context, endpointID string) (*WebhookEndpoint, error) {
+	var endpointUUID pgtype.UUID
+	if err := endpointUUID.Scan(endpointID); err != nil {
+		return nil, ErrWebhookEndpointNotFound
+	}
+
 	var endpoint WebhookEndpoint
 	err := store.pool.QueryRow(ctx, `
 		SELECT id::text, github_repository_id, webhook_secret_ciphertext
 		FROM repositories
-		WHERE endpoint_id::text = $1 AND deleted_at IS NULL
-	`, endpointID).Scan(&endpoint.RepositoryID, &endpoint.GithubRepositoryID, &endpoint.WebhookSecretCiphertext)
+		WHERE endpoint_id = $1 AND deleted_at IS NULL
+	`, endpointUUID).Scan(&endpoint.RepositoryID, &endpoint.GithubRepositoryID, &endpoint.WebhookSecretCiphertext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrWebhookEndpointNotFound
 	}
