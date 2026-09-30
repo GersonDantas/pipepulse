@@ -18,9 +18,9 @@ import (
 const principalContextKey = "pipepulse_principal"
 
 type AuthenticationService interface {
-	Start(context.Context) (string, error)
+	Start(context.Context) (services.OAuthStart, error)
 	Callback(context.Context, string, string) (string, error)
-	Exchange(context.Context, string) (services.Tokens, error)
+	Exchange(context.Context, string, string) (services.Tokens, error)
 	Refresh(context.Context, string) (services.Tokens, error)
 	Authenticate(context.Context, string) (repository.Principal, error)
 	Logout(context.Context, string) error
@@ -36,12 +36,12 @@ func NewAuth(service AuthenticationService, logger *slog.Logger) *AuthHandler {
 }
 
 func (handler *AuthHandler) GithubStart(c *gin.Context) {
-	authorizationURL, err := handler.service.Start(c.Request.Context())
+	result, err := handler.service.Start(c.Request.Context())
 	if err != nil {
 		handler.internalError(c, "start GitHub OAuth", err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"authorization_url": authorizationURL})
+	c.JSON(http.StatusOK, result)
 }
 
 func (handler *AuthHandler) GithubCallback(c *gin.Context) {
@@ -59,13 +59,14 @@ func (handler *AuthHandler) GithubCallback(c *gin.Context) {
 
 func (handler *AuthHandler) Exchange(c *gin.Context) {
 	var request struct {
-		Code string `json:"code"`
+		Code             string `json:"code"`
+		ExchangeVerifier string `json:"exchange_verifier"`
 	}
-	if !decodeJSON(c, &request) || strings.TrimSpace(request.Code) == "" {
-		writeAPIError(c, http.StatusBadRequest, "invalid_request", "code is required", "")
+	if !decodeJSON(c, &request) || strings.TrimSpace(request.Code) == "" || strings.TrimSpace(request.ExchangeVerifier) == "" {
+		writeAPIError(c, http.StatusBadRequest, "invalid_request", "code and exchange_verifier are required", "")
 		return
 	}
-	tokens, err := handler.service.Exchange(c.Request.Context(), request.Code)
+	tokens, err := handler.service.Exchange(c.Request.Context(), request.Code, request.ExchangeVerifier)
 	if err != nil {
 		if errors.Is(err, services.ErrInvalidExchangeCode) {
 			writeAPIError(c, http.StatusBadRequest, "invalid_exchange_code", "invalid or expired exchange code", "")

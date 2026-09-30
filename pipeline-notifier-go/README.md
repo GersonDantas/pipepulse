@@ -107,7 +107,7 @@ O HMAC é calculado com SHA-256 sobre os bytes exatos do corpo e o segredo indiv
 
 ## API do produto
 
-O login começa em `POST /v1/auth/github/start`. O callback GitHub entrega ao aplicativo um código de troca de uso único; `POST /v1/auth/github/exchange` retorna access token de 15 minutos e refresh token rotativo de 30 dias. Apenas hashes dos tokens são persistidos.
+O login começa em `POST /v1/auth/github/start`, que retorna `authorization_url` e `exchange_verifier`. O aplicativo deve guardar o verificador localmente antes de abrir a URL. O callback GitHub entrega ao aplicativo um código de troca de uso único, sem o verificador no deep link. `POST /v1/auth/github/exchange` exige `code` e `exchange_verifier` e retorna access token de 15 minutos e refresh token rotativo de 30 dias. Apenas hashes dos tokens são persistidos.
 
 As rotas autenticadas expõem bootstrap, cadastro e consulta de repositórios, rotação do segredo, feed paginado, dispositivo, logout e exclusão da conta. Todas exigem `Authorization: Bearer <access_token>` e aplicam o workspace da sessão. Um recurso de outro workspace responde `404`.
 

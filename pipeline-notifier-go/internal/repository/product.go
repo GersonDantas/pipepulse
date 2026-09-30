@@ -230,6 +230,7 @@ func (store *PostgresStore) ListFailures(ctx context.Context, workspaceID string
 		JOIN repositories AS repository ON repository.id = failure.repository_id
 		JOIN monitored_workflows AS workflow ON workflow.id = failure.monitored_workflow_id
 		WHERE repository.workspace_id = $1 AND repository.deleted_at IS NULL
+			AND failure.event_timestamp >= now() - interval '7 days'
 			AND ($2::timestamptz IS NULL OR failure.event_timestamp < $2
 				OR (failure.event_timestamp = $2 AND failure.id::text < $3))
 		ORDER BY failure.event_timestamp DESC, failure.id DESC
@@ -321,12 +322,39 @@ func (store *PostgresStore) DeleteDevice(ctx context.Context, userID string) err
 }
 
 func (store *PostgresStore) DeleteAccount(ctx context.Context, userID string) error {
-	result, err := store.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin account deletion: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	var githubUserID int64
+	if err := tx.QueryRow(ctx, `SELECT github_user_id FROM users WHERE id = $1`, userID).Scan(&githubUserID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrProductNotFound
+	} else if err != nil {
+		return fmt.Errorf("find account: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, githubUserID); err != nil {
+		return fmt.Errorf("lock account identity: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO oauth_account_deletions (github_user_id)
+		VALUES ($1)
+		ON CONFLICT (github_user_id) DO UPDATE SET deleted_at = clock_timestamp()
+	`, githubUserID); err != nil {
+		return fmt.Errorf("mark account deleted: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM oauth_requests WHERE github_user_id = $1`, githubUserID); err != nil {
+		return fmt.Errorf("delete account OAuth requests: %w", err)
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
 	if result.RowsAffected() != 1 {
 		return ErrProductNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit account deletion: %w", err)
 	}
 	return nil
 }

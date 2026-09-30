@@ -49,6 +49,11 @@ type Tokens struct {
 	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
 }
 
+type OAuthStart struct {
+	AuthorizationURL string `json:"authorization_url"`
+	ExchangeVerifier string `json:"exchange_verifier"`
+}
+
 type AuthService struct {
 	repository repository.AuthStore
 	github     GithubAuthenticator
@@ -63,26 +68,31 @@ func NewAuthService(authRepository repository.AuthStore, github GithubAuthentica
 	return &AuthService{repository: authRepository, github: github, secretBox: secretBox, config: config}
 }
 
-func (service *AuthService) Start(ctx context.Context) (string, error) {
+func (service *AuthService) Start(ctx context.Context) (OAuthStart, error) {
 	state, err := randomToken()
 	if err != nil {
-		return "", err
+		return OAuthStart{}, err
 	}
 	verifier, err := randomToken()
 	if err != nil {
-		return "", err
+		return OAuthStart{}, err
+	}
+	exchangeVerifier, err := randomToken()
+	if err != nil {
+		return OAuthStart{}, err
 	}
 	ciphertext, err := service.secretBox.Encrypt([]byte(verifier))
 	if err != nil {
-		return "", fmt.Errorf("encrypt PKCE verifier: %w", err)
+		return OAuthStart{}, fmt.Errorf("encrypt PKCE verifier: %w", err)
 	}
 	if err := service.repository.CreateOAuthRequest(ctx, repository.OAuthRequest{
 		StateHash:              tokenHash(state),
 		CodeVerifierCiphertext: ciphertext,
+		ExchangeVerifierHash:   tokenHash(exchangeVerifier),
 		RedirectURI:            service.config.MobileRedirectURI,
 		ExpiresAt:              service.config.Now().Add(oauthRequestLifetime),
 	}); err != nil {
-		return "", fmt.Errorf("create oauth request: %w", err)
+		return OAuthStart{}, fmt.Errorf("create oauth request: %w", err)
 	}
 
 	challenge := sha256.Sum256([]byte(verifier))
@@ -94,7 +104,7 @@ func (service *AuthService) Start(ctx context.Context) (string, error) {
 		"code_challenge":        {base64.RawURLEncoding.EncodeToString(challenge[:])},
 		"code_challenge_method": {"S256"},
 	}
-	return "https://github.com/login/oauth/authorize?" + query.Encode(), nil
+	return OAuthStart{AuthorizationURL: "https://github.com/login/oauth/authorize?" + query.Encode(), ExchangeVerifier: exchangeVerifier}, nil
 }
 
 func (service *AuthService) Callback(ctx context.Context, state, code string) (string, error) {
@@ -137,15 +147,15 @@ func (service *AuthService) Callback(ctx context.Context, state, code string) (s
 	return redirect.String(), nil
 }
 
-func (service *AuthService) Exchange(ctx context.Context, exchangeCode string) (Tokens, error) {
-	if strings.TrimSpace(exchangeCode) == "" {
+func (service *AuthService) Exchange(ctx context.Context, exchangeCode, exchangeVerifier string) (Tokens, error) {
+	if strings.TrimSpace(exchangeCode) == "" || strings.TrimSpace(exchangeVerifier) == "" {
 		return Tokens{}, ErrInvalidExchangeCode
 	}
 	tokens, stored, err := service.newTokens()
 	if err != nil {
 		return Tokens{}, err
 	}
-	if _, err := service.repository.ExchangeOAuthSession(ctx, tokenHash(exchangeCode), stored, service.config.Now()); errors.Is(err, repository.ErrOAuthExchangeNotFound) {
+	if _, err := service.repository.ExchangeOAuthSession(ctx, tokenHash(exchangeCode), tokenHash(exchangeVerifier), stored, service.config.Now()); errors.Is(err, repository.ErrOAuthExchangeNotFound) {
 		return Tokens{}, ErrInvalidExchangeCode
 	} else if err != nil {
 		return Tokens{}, fmt.Errorf("exchange oauth session: %w", err)

@@ -17,6 +17,7 @@ type OAuthRequest struct {
 	ID                     string
 	StateHash              []byte
 	CodeVerifierCiphertext []byte
+	ExchangeVerifierHash   []byte
 	RedirectURI            string
 	ExpiresAt              time.Time
 }
@@ -39,7 +40,7 @@ type AuthStore interface {
 	CreateOAuthRequest(context.Context, OAuthRequest) error
 	ConsumeOAuthRequest(context.Context, []byte, time.Time) (OAuthRequest, error)
 	CompleteOAuthRequest(context.Context, string, []byte, int64, string, time.Time) error
-	ExchangeOAuthSession(context.Context, []byte, SessionTokens, time.Time) (Principal, error)
+	ExchangeOAuthSession(context.Context, []byte, []byte, SessionTokens, time.Time) (Principal, error)
 	RotateSession(context.Context, []byte, SessionTokens, time.Time) (Principal, error)
 	Authenticate(context.Context, []byte, time.Time) (Principal, error)
 	RevokeSession(context.Context, []byte, time.Time) error
@@ -47,9 +48,9 @@ type AuthStore interface {
 
 func (store *PostgresStore) CreateOAuthRequest(ctx context.Context, request OAuthRequest) error {
 	_, err := store.pool.Exec(ctx, `
-		INSERT INTO oauth_requests (state_hash, code_verifier_ciphertext, redirect_uri, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, request.StateHash, request.CodeVerifierCiphertext, request.RedirectURI, request.ExpiresAt)
+		INSERT INTO oauth_requests (state_hash, code_verifier_ciphertext, exchange_verifier_hash, redirect_uri, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, request.StateHash, request.CodeVerifierCiphertext, request.ExchangeVerifierHash, request.RedirectURI, request.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("insert oauth request: %w", err)
 	}
@@ -74,10 +75,22 @@ func (store *PostgresStore) ConsumeOAuthRequest(ctx context.Context, stateHash [
 }
 
 func (store *PostgresStore) CompleteOAuthRequest(ctx context.Context, id string, exchangeHash []byte, githubUserID int64, githubLogin string, expiresAt time.Time) error {
-	result, err := store.pool.Exec(ctx, `
-		UPDATE oauth_requests
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin oauth completion: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, githubUserID); err != nil {
+		return fmt.Errorf("lock oauth identity: %w", err)
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE oauth_requests AS request
 		SET exchange_token_hash = $2, github_user_id = $3, github_login = $4, exchange_expires_at = $5
-		WHERE id = $1 AND used_at IS NOT NULL AND exchange_token_hash IS NULL
+		WHERE request.id = $1 AND request.used_at IS NOT NULL AND request.exchange_token_hash IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM oauth_account_deletions AS deletion
+				WHERE deletion.github_user_id = $3 AND request.created_at <= deletion.deleted_at
+			)
 	`, id, exchangeHash, githubUserID, githubLogin, expiresAt)
 	if err != nil {
 		return fmt.Errorf("complete oauth request: %w", err)
@@ -85,10 +98,13 @@ func (store *PostgresStore) CompleteOAuthRequest(ctx context.Context, id string,
 	if result.RowsAffected() != 1 {
 		return ErrOAuthRequestNotFound
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit oauth completion: %w", err)
+	}
 	return nil
 }
 
-func (store *PostgresStore) ExchangeOAuthSession(ctx context.Context, exchangeHash []byte, tokens SessionTokens, now time.Time) (Principal, error) {
+func (store *PostgresStore) ExchangeOAuthSession(ctx context.Context, exchangeHash, verifierHash []byte, tokens SessionTokens, now time.Time) (Principal, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return Principal{}, fmt.Errorf("begin oauth exchange: %w", err)
@@ -101,9 +117,10 @@ func (store *PostgresStore) ExchangeOAuthSession(ctx context.Context, exchangeHa
 	err = tx.QueryRow(ctx, `
 		SELECT id::text, github_user_id, github_login
 		FROM oauth_requests
-		WHERE exchange_token_hash = $1 AND exchanged_at IS NULL AND exchange_expires_at > $2
+		WHERE exchange_token_hash = $1 AND exchange_verifier_hash = $2
+			AND exchanged_at IS NULL AND exchange_expires_at > $3
 		FOR UPDATE
-	`, exchangeHash, now).Scan(&requestID, &githubUserID, &githubLogin)
+	`, exchangeHash, verifierHash, now).Scan(&requestID, &githubUserID, &githubLogin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrOAuthExchangeNotFound
 	}

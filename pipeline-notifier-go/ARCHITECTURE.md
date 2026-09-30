@@ -84,7 +84,7 @@ As relações compostas impedem associar uma sessão a outro workspace, um dispo
 
 ## Autenticação e isolamento
 
-O backend cria `state` e verifier PKCE aleatórios, persiste apenas o hash do `state` e mantém o verifier criptografado. O callback consome o `state` uma única vez, usa o token GitHub somente para consultar `/user` e entrega ao deep link móvel outro código de uso único. O consumo desse código, o upsert de usuário/workspace e a criação da sessão ocorrem na mesma transação.
+O backend cria `state` e verifier PKCE aleatórios, persiste apenas o hash do `state` e mantém o verifier criptografado. O início retorna ao aplicativo outro verificador aleatório, cujo hash é persistido. O callback consome o `state` uma única vez, usa o token GitHub somente para consultar `/user` e entrega ao deep link móvel um código de uso único sem o verificador do aplicativo. A troca exige ambos; o consumo do código, o upsert de usuário/workspace e a criação da sessão ocorrem na mesma transação.
 
 Access e refresh tokens são valores opacos aleatórios; somente hashes SHA-256 ficam no banco. O access token expira em 15 minutos. O refresh expira em 30 dias e sua rotação substitui atomicamente ambos os hashes. Logout revoga a sessão e a exclusão do usuário remove por cascata workspace, sessões, dispositivo e endpoints.
 
@@ -94,7 +94,7 @@ Todas as rotas de produto usam o workspace obtido da sessão. Consultas e mutaç
 
 O limite Free de três repositórios é verificado dentro de uma transação que bloqueia o workspace, evitando ultrapassagem por requisições concorrentes. Criação e rotação retornam o segredo do webhook somente na resposta atual. Listagens nunca leem nem devolvem o segredo criptografado.
 
-O feed usa cursor opaco composto por timestamp e UUID, ordenado de forma determinística. O registro de dispositivo substitui o dispositivo ativo anterior do usuário e rejeita um token já associado a outra conta.
+O feed usa cursor opaco composto por timestamp e UUID, ordenado de forma determinística, e filtra diretamente os últimos sete dias do plano Free. O registro de dispositivo substitui o dispositivo ativo anterior do usuário e rejeita um token já associado a outra conta.
 
 ## Fronteira do webhook
 

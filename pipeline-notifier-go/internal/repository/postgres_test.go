@@ -247,7 +247,7 @@ func truncate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		DROP FUNCTION IF EXISTS reject_failure() CASCADE;
 		TRUNCATE notification_deliveries, webhook_deliveries, devices, pipeline_failures,
 			pipeline_states, monitored_workflows, repositories, sessions, oauth_requests,
-			workspaces, users CASCADE;
+			oauth_account_deletions, workspaces, users CASCADE;
 	`); err != nil {
 		t.Fatalf("truncate database: %v", err)
 	}

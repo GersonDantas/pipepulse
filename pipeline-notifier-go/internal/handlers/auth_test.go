@@ -21,21 +21,21 @@ type fakeAuthService struct {
 	principal   repository.Principal
 }
 
-func (service *fakeAuthService) Start(context.Context) (string, error) {
-	return "https://github.com/login/oauth/authorize?state=test", nil
+func (service *fakeAuthService) Start(context.Context) (services.OAuthStart, error) {
+	return services.OAuthStart{AuthorizationURL: "https://github.com/login/oauth/authorize?state=test", ExchangeVerifier: "verifier"}, nil
 }
 
 func (service *fakeAuthService) Callback(context.Context, string, string) (string, error) {
 	return "com.pipepulse.app://oauth?code=exchange", nil
 }
 
-func (service *fakeAuthService) Exchange(context.Context, string) (services.Tokens, error) {
+func (service *fakeAuthService) Exchange(context.Context, string, string) (services.Tokens, error) {
 	now := time.Date(2026, 8, 19, 15, 0, 0, 0, time.UTC)
 	return services.Tokens{AccessToken: "access", RefreshToken: "refresh", AccessExpiresAt: now.Add(15 * time.Minute), RefreshExpiresAt: now.Add(30 * 24 * time.Hour)}, nil
 }
 
 func (service *fakeAuthService) Refresh(context.Context, string) (services.Tokens, error) {
-	return service.Exchange(context.Background(), "")
+	return service.Exchange(context.Background(), "", "")
 }
 
 func (service *fakeAuthService) Authenticate(_ context.Context, token string) (repository.Principal, error) {
@@ -68,7 +68,7 @@ func TestAuthHandlerExposesOAuthAndProtectsProductRoutes(t *testing.T) {
 
 	start := httptest.NewRecorder()
 	router.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/v1/auth/github/start", nil))
-	if start.Code != http.StatusOK || !strings.Contains(start.Body.String(), "github.com") {
+	if start.Code != http.StatusOK || !strings.Contains(start.Body.String(), "github.com") || !strings.Contains(start.Body.String(), `"exchange_verifier":"verifier"`) {
 		t.Fatalf("start response = %d %s", start.Code, start.Body.String())
 	}
 	callback := httptest.NewRecorder()
@@ -78,8 +78,13 @@ func TestAuthHandlerExposesOAuthAndProtectsProductRoutes(t *testing.T) {
 	}
 	exchange := httptest.NewRecorder()
 	router.ServeHTTP(exchange, httptest.NewRequest(http.MethodPost, "/v1/auth/github/exchange", strings.NewReader(`{"code":"exchange"}`)))
+	if exchange.Code != http.StatusBadRequest {
+		t.Fatalf("exchange without client verifier = %d %s, want 400", exchange.Code, exchange.Body.String())
+	}
+	exchange = httptest.NewRecorder()
+	router.ServeHTTP(exchange, httptest.NewRequest(http.MethodPost, "/v1/auth/github/exchange", strings.NewReader(`{"code":"exchange","exchange_verifier":"verifier"}`)))
 	if exchange.Code != http.StatusOK || !strings.Contains(exchange.Body.String(), `"access_token":"access"`) {
-		t.Fatalf("exchange response = %d %s", exchange.Code, exchange.Body.String())
+		t.Fatalf("exchange response = %d %s, want tokens", exchange.Code, exchange.Body.String())
 	}
 
 	unauthorized := httptest.NewRecorder()

@@ -57,12 +57,15 @@ func TestPostgresProductStoreEnforcesLimitsAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("cross-workspace RotateRepositorySecret() error = %v, want ErrProductNotFound", err)
 	}
 
+	now := time.Now().UTC()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO pipeline_failures (
 			repository_id, monitored_workflow_id, github_repository_id, github_workflow_id,
 			workflow_run_id, run_attempt, conclusion, event_timestamp
-		) VALUES ($1, $2, $3, $4, 100, 1, 'failure', $5)
-	`, created.ID, created.Workflow.ID, created.GithubRepositoryID, created.Workflow.GithubWorkflowID, time.Date(2026, 8, 19, 15, 0, 0, 0, time.UTC)); err != nil {
+		) VALUES ($1, $2, $3, $4, 100, 1, 'failure', $5),
+			($1, $2, $3, $4, 101, 1, 'failure', $6)
+	`, created.ID, created.Workflow.ID, created.GithubRepositoryID, created.Workflow.GithubWorkflowID,
+		now.Add(-time.Hour), now.Add(-8*24*time.Hour)); err != nil {
 		t.Fatalf("insert failure: %v", err)
 	}
 	failures, err := store.ListFailures(ctx, first.WorkspaceID, nil, 20)

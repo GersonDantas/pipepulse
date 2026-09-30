@@ -74,8 +74,8 @@ func (repo *fakeAuthRepository) CompleteOAuthRequest(_ context.Context, id strin
 	return nil
 }
 
-func (repo *fakeAuthRepository) ExchangeOAuthSession(_ context.Context, exchangeHash []byte, tokens repository.SessionTokens, _ time.Time) (repository.Principal, error) {
-	if !hashesEqual(exchangeHash, repo.exchangeHash) {
+func (repo *fakeAuthRepository) ExchangeOAuthSession(_ context.Context, exchangeHash, verifierHash []byte, tokens repository.SessionTokens, _ time.Time) (repository.Principal, error) {
+	if !hashesEqual(exchangeHash, repo.exchangeHash) || !hashesEqual(verifierHash, repo.request.ExchangeVerifierHash) {
 		return repository.Principal{}, repository.ErrOAuthExchangeNotFound
 	}
 	repo.session = tokens
@@ -132,10 +132,11 @@ func TestAuthServiceCompletesPKCEAndCreatesRotatingSession(t *testing.T) {
 		Now:               func() time.Time { return now },
 	})
 
-	authorizationURL, err := service.Start(context.Background())
+	start, err := service.Start(context.Background())
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	authorizationURL := start.AuthorizationURL
 	parsed, err := url.Parse(authorizationURL)
 	if err != nil {
 		t.Fatalf("authorization URL = %q: %v", authorizationURL, err)
@@ -144,8 +145,11 @@ func TestAuthServiceCompletesPKCEAndCreatesRotatingSession(t *testing.T) {
 		t.Fatalf("authorization URL = %q, want GitHub PKCE URL", authorizationURL)
 	}
 	state := parsed.Query().Get("state")
-	if state == "" || parsed.Query().Get("code_challenge") == "" {
+	if state == "" || parsed.Query().Get("code_challenge") == "" || start.ExchangeVerifier == "" {
 		t.Fatalf("authorization URL = %q, want state and challenge", authorizationURL)
+	}
+	if strings.Contains(authorizationURL, start.ExchangeVerifier) {
+		t.Fatal("authorization URL exposed client exchange verifier")
 	}
 
 	redirect, err := service.Callback(context.Background(), state, "github-code")
@@ -162,8 +166,14 @@ func TestAuthServiceCompletesPKCEAndCreatesRotatingSession(t *testing.T) {
 	if err != nil || exchangeCode.Query().Get("code") == "" {
 		t.Fatalf("redirect = %q, want one-time exchange code", redirect)
 	}
+	if strings.Contains(redirect, start.ExchangeVerifier) {
+		t.Fatal("mobile redirect exposed client exchange verifier")
+	}
 
-	tokens, err := service.Exchange(context.Background(), exchangeCode.Query().Get("code"))
+	if _, err := service.Exchange(context.Background(), exchangeCode.Query().Get("code"), "wrong-verifier"); err != ErrInvalidExchangeCode {
+		t.Fatalf("exchange with wrong verifier error = %v, want ErrInvalidExchangeCode", err)
+	}
+	tokens, err := service.Exchange(context.Background(), exchangeCode.Query().Get("code"), start.ExchangeVerifier)
 	if err != nil {
 		t.Fatalf("Exchange() error = %v", err)
 	}

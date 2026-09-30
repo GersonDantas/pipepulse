@@ -290,6 +290,8 @@ Decisões:
 
 OAuth usará Authorization Code com PKCE `S256` e `state` de uso único. O token GitHub será usado somente para consultar `/user` e será descartado em seguida.
 
+O início do login também retorna um `exchange_verifier` aleatório ao aplicativo. O aplicativo deve guardá-lo localmente e enviá-lo com o código móvel em `/v1/auth/github/exchange`; o deep link não contém esse verificador. O backend guarda somente seu hash e rejeita a troca sem o verificador correspondente.
+
 - access token: 15 minutos
 - refresh token: 30 dias
 - refresh token rotacionado a cada uso
@@ -309,6 +311,7 @@ OAuth usará Authorization Code com PKCE `S256` e `state` de uso único. O token
 - `DELETE /v1/account`
 
 O feed terá limite padrão 20 e máximo 50. Todas as rotas `/v1`, exceto autenticação, exigem bearer token e aplicam o workspace da sessão. Recurso pertencente a outro workspace responde `404`.
+No plano Free, a consulta do feed aplica diretamente a janela dos últimos sete dias, mesmo entre execuções da limpeza periódica.
 
 Erro padrão:
 
@@ -420,6 +423,7 @@ Regras:
 - payload integral não deve aparecer em logs
 - tokens de sessão persistidos por hash
 - isolamento obrigatório por workspace
+- exclusão da conta invalida códigos OAuth pendentes da identidade e pedidos iniciados antes dela, mesmo que o callback termine depois; remove os registros identificáveis quando deixam de ser necessários para essa proteção
 - HMAC calculado sobre os bytes originais
 - comparação de assinatura em tempo constante
 

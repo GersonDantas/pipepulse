@@ -326,6 +326,23 @@ func (store *PostgresStore) Cleanup(ctx context.Context, now time.Time) (Retenti
 		return RetentionResult{}, fmt.Errorf("begin retention transaction: %w", err)
 	}
 	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM oauth_requests
+		WHERE exchanged_at IS NOT NULL OR exchange_expires_at <= $1
+			OR (exchange_expires_at IS NULL AND expires_at <= $1)
+	`, now); err != nil {
+		return RetentionResult{}, fmt.Errorf("delete expired OAuth requests: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM oauth_account_deletions AS deletion
+		WHERE deletion.deleted_at <= $1::timestamptz - interval '10 minutes'
+			AND NOT EXISTS (
+			SELECT 1 FROM oauth_requests AS request
+			WHERE request.created_at <= deletion.deleted_at
+		)
+	`, now); err != nil {
+		return RetentionResult{}, fmt.Errorf("delete obsolete OAuth account markers: %w", err)
+	}
 
 	notificationResult, err := tx.Exec(ctx, `
 		DELETE FROM notification_deliveries
