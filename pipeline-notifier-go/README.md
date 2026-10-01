@@ -15,6 +15,7 @@ Webhook
   -> sinal não durável para o worker
   -> processor
   -> transação de estado, falha, outbox e conclusão da entrega
+  -> sender separado: claim durável, Firebase HTTP v1 e resultado persistido
 ```
 
 O PostgreSQL é a fonte de verdade. O canal em memória possui capacidade um e serve apenas para acordar o worker. Na inicialização e periodicamente, o worker consulta entregas pendentes, portanto um reinício ou sinal perdido não perde trabalho.
@@ -40,7 +41,7 @@ docker run --rm --name pipepulse-postgres \
 
 ## Configuração
 
-As configurações de banco, criptografia e OAuth abaixo são obrigatórias. As demais possuem os valores padrão indicados.
+As configurações de banco, criptografia, OAuth e FCM abaixo são obrigatórias. As demais possuem os valores padrão indicados.
 
 | Variável | Padrão | Finalidade |
 | --- | --- | --- |
@@ -50,6 +51,7 @@ As configurações de banco, criptografia e OAuth abaixo são obrigatórias. As 
 | `GITHUB_CLIENT_ID` | sem padrão | client ID do GitHub OAuth App |
 | `GITHUB_CLIENT_SECRET` | sem padrão | client secret do GitHub OAuth App |
 | `MOBILE_OAUTH_REDIRECT_URI` | sem padrão | deep link de retorno ao aplicativo |
+| `FCM_CREDENTIALS_JSON_B64` | sem padrão | JSON da conta de serviço Firebase codificado em base64, somente no backend |
 | `PORT` | `3000` | porta HTTP |
 | `ENVIRONMENT` | `development` | identificação do ambiente |
 | `LOG_LEVEL` | `info` | nível dos logs JSON |
@@ -68,6 +70,7 @@ export APP_BASE_URL='http://localhost:3000'
 export GITHUB_CLIENT_ID='<github-client-id>'
 export GITHUB_CLIENT_SECRET='<github-client-secret>'
 export MOBILE_OAUTH_REDIRECT_URI='com.pipepulse.app://oauth'
+export FCM_CREDENTIALS_JSON_B64='<base64-do-json-da-conta-de-servico-firebase>'
 go run ./cmd/api
 ```
 
@@ -127,9 +130,21 @@ Migrations, transações, rollback, recuperação e retenção contra PostgreSQL
 PIPEPULSE_INTEGRATION=1 go test ./internal/database ./internal/repository ./internal/handlers -count=1
 ```
 
+## Notificações FCM
+
+O sender consulta a outbox ao iniciar e a cada `WORKER_POLL_INTERVAL`. Cada claim persiste a tentativa antes do HTTP e reserva a entrega até o próximo intervalo. As tentativas são limitadas a cinco, com intervalos de 1 minuto, 5 minutos, 30 minutos e 2 horas; `Retry-After` pode estender o intervalo. Após queda na quinta tentativa, a reserva expira em um minuto e a entrega é abandonada. Uma conclusão antiga não altera a tentativa atual nem desativa seu dispositivo.
+
+Tokens continuam criptografados com AES-256-GCM. O sender desativa o dispositivo quando o Firebase identifica `UNREGISTERED` e abandona suas entregas pendentes. `INVALID_ARGUMENT` abandona somente a entrega, pois também pode representar um payload inválido. Dispositivos desativados e falhas removidas não recebem novos envios.
+
+O payload contém uma mensagem genérica e `notification_id`, `failure_id` e `repository_id`. O aplicativo da Fase 6 deverá usar os identificadores para consultar o feed autenticado e tratar duplicidades. Nenhum nome de repositório, branch, SHA ou URL aparece na mensagem da tela bloqueada.
+
+`sent` significa aceitação pelo FCM, não recebimento confirmado no aparelho. Existe uma janela entre aceitação remota e persistência do resultado em que um retry pode repetir o envio. Android `tag` e `apns-collapse-id` mitigam duplicidades, mas não garantem uma entrega por falha; mensagens de notificação pendentes também podem ser colapsadas quando o aparelho está offline. Um push já em voo pode chegar após desativação ou exclusão. Essas limitações permanecem no aceite do MVP.
+
+Os testes usam sender fake e transporte HTTP controlado. Nenhum teste automatizado envia push para um projeto Firebase real.
+
 ## Estado da implementação
 
-Implementado até a Fase 4:
+Implementado até a Fase 5, ainda aguardando revisão e aceite desta fase:
 
 - pool PostgreSQL com `pgxpool`
 - schema completo do MVP em migration Goose embutida
@@ -149,8 +164,11 @@ Implementado até a Fase 4:
 - API de repositórios e workflow com limite Free transacional
 - feed de falhas paginado e isolado por workspace
 - registro de um dispositivo ativo, logout e exclusão da conta
+- sender Firebase HTTP v1 com renovação OAuth e cancelamento por tentativa
+- claims duráveis, recuperação, retry limitado e invalidação de tokens
 
 Ainda fora do escopo desta fase:
 
-- sender FCM e política de retry
 - aplicativo Flutter
+
+O relatório da Fase 5 e o roteiro de validação estão em [`docs/PR_FASE5_FCM.md`](./docs/PR_FASE5_FCM.md).
