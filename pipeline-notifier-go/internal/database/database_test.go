@@ -23,6 +23,7 @@ func TestMigrateCreatesCompleteMVPSchema(t *testing.T) {
 	defer pool.Close()
 
 	wantTables := []string{
+		"oauth_account_deletions",
 		"users",
 		"workspaces",
 		"oauth_requests",

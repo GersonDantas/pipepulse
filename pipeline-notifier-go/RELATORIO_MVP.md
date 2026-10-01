@@ -47,8 +47,8 @@ Estados permitidos:
 | 0 | Plano central e alinhamento documental | aprovada | `main` após merge | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | concluída |
 | 1 | Fundação Go | aprovada | `main` após merge | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | concluída |
 | 2 | PostgreSQL e persistência durável | aprovada | `main` após merge | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | concluída |
-| 3 | Webhook GitHub vertical | aprovada | `feat/mvp-github-webhook` | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | concluída |
-| 4 | Autenticação e API do produto | pendente | `feat/mvp-auth-api` | não aberto | Fase 3 aprovada |
+| 3 | Webhook GitHub vertical | aprovada | `main` após merge | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | concluída |
+| 4 | Autenticação e API do produto | em revisão | `feat/mvp-auth-api` | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | revisão, testes e aprovação explícita do usuário |
 | 5 | FCM, outbox e retry | pendente | `feat/mvp-fcm` | não aberto | Fase 4 aprovada |
 | 6 | Aplicativo Flutter Android/iOS | pendente | `feat/mvp-flutter-app` | não aberto | Fases 4 e 5 aprovadas |
 | 7 | Operação privada e alpha | pendente | `chore/mvp-private-alpha-release` | não aberto | Fases 1 a 6 aprovadas |
@@ -66,7 +66,8 @@ Atualizar uma linha ao abrir, revisar, aprovar ou rejeitar cada PR. O relatório
 | 0 | [#1](https://github.com/GersonDantas/pipepulse/pull/1) | `docs/mvp-central-plan` | aprovada | 3 | `git diff --check`, `go test ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário | plano central criado, documentos antigos alinhados e Fase 1 liberada |
 | 1 | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | `feat/mvp-backend-foundation` | aprovada | 6 | `go test ./...`, `go test -race ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário em 2026-07-22 | configuração, composição explícita, evento GitHub normalizado, fila drenável e logging estruturado incorporados à `main` |
 | 2 | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | `feat/mvp-postgres` | aprovada | 4 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-08-18 | schema completo, transação atômica, recuperação, retenção e entitlements Free incorporados à `main` |
-| 3 | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | `feat/mvp-github-webhook` | aprovada | 9 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-08-19 | endpoint seguro, associação persistente, busca indexada e fluxo até o feed aprovados; merge pendente |
+| 3 | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | `feat/mvp-github-webhook` | aprovada | 9 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-08-19 | endpoint seguro, associação persistente, busca indexada e fluxo até o feed incorporados à `main` |
+| 4 | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | `feat/mvp-auth-api` | em revisão | 4 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | pendente | OAuth GitHub com PKCE, sessões rotativas e API do produto entregues para revisão |
 
 Nenhuma linha pode ser marcada como `aprovada` sem a confirmação explícita do usuário. Quando um PR for reprovado ou exigir correções, manter o mesmo registro e anotar a nova rodada de testes.
 
@@ -289,6 +290,8 @@ Decisões:
 
 OAuth usará Authorization Code com PKCE `S256` e `state` de uso único. O token GitHub será usado somente para consultar `/user` e será descartado em seguida.
 
+O início do login também retorna um `exchange_verifier` aleatório ao aplicativo. O aplicativo deve guardá-lo localmente e enviá-lo com o código móvel em `/v1/auth/github/exchange`; o deep link não contém esse verificador. O backend guarda somente seu hash e rejeita a troca sem o verificador correspondente.
+
 - access token: 15 minutos
 - refresh token: 30 dias
 - refresh token rotacionado a cada uso
@@ -308,6 +311,7 @@ OAuth usará Authorization Code com PKCE `S256` e `state` de uso único. O token
 - `DELETE /v1/account`
 
 O feed terá limite padrão 20 e máximo 50. Todas as rotas `/v1`, exceto autenticação, exigem bearer token e aplicam o workspace da sessão. Recurso pertencente a outro workspace responde `404`.
+No plano Free, a consulta do feed aplica diretamente a janela dos últimos sete dias, mesmo entre execuções da limpeza periódica.
 
 Erro padrão:
 
@@ -419,6 +423,7 @@ Regras:
 - payload integral não deve aparecer em logs
 - tokens de sessão persistidos por hash
 - isolamento obrigatório por workspace
+- exclusão da conta invalida códigos OAuth pendentes da identidade e pedidos iniciados antes dela, mesmo que o callback termine depois; remove os registros identificáveis quando deixam de ser necessários para essa proteção
 - HMAC calculado sobre os bytes originais
 - comparação de assinatura em tempo constante
 

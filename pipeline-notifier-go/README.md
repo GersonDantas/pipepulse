@@ -40,12 +40,16 @@ docker run --rm --name pipepulse-postgres \
 
 ## Configuração
 
-`DATABASE_URL` e `DATA_ENCRYPTION_KEY` são obrigatórias. As demais configurações abaixo possuem os valores padrão indicados.
+As configurações de banco, criptografia e OAuth abaixo são obrigatórias. As demais possuem os valores padrão indicados.
 
 | Variável | Padrão | Finalidade |
 | --- | --- | --- |
 | `DATABASE_URL` | sem padrão | conexão PostgreSQL |
 | `DATA_ENCRYPTION_KEY` | sem padrão | chave AES-256 em base64 para os segredos armazenados |
+| `APP_BASE_URL` | sem padrão | URL HTTPS pública da API |
+| `GITHUB_CLIENT_ID` | sem padrão | client ID do GitHub OAuth App |
+| `GITHUB_CLIENT_SECRET` | sem padrão | client secret do GitHub OAuth App |
+| `MOBILE_OAUTH_REDIRECT_URI` | sem padrão | deep link de retorno ao aplicativo |
 | `PORT` | `3000` | porta HTTP |
 | `ENVIRONMENT` | `development` | identificação do ambiente |
 | `LOG_LEVEL` | `info` | nível dos logs JSON |
@@ -60,6 +64,10 @@ As migrations Goose estão embutidas no binário e são aplicadas antes da abert
 ```bash
 export DATABASE_URL='postgres://pipepulse:pipepulse@localhost:5432/pipepulse?sslmode=disable'
 export DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export APP_BASE_URL='http://localhost:3000'
+export GITHUB_CLIENT_ID='<github-client-id>'
+export GITHUB_CLIENT_SECRET='<github-client-secret>'
+export MOBILE_OAUTH_REDIRECT_URI='com.pipepulse.app://oauth'
 go run ./cmd/api
 ```
 
@@ -97,6 +105,12 @@ curl -i http://localhost:3000/webhooks/github/00000000-0000-0000-0000-0000000000
 
 O HMAC é calculado com SHA-256 sobre os bytes exatos do corpo e o segredo individual do repositório. Corpos maiores que 1 MiB, assinaturas inválidas, outros tipos de evento e workflows não cadastrados são rejeitados antes da persistência.
 
+## API do produto
+
+O login começa em `POST /v1/auth/github/start`, que retorna `authorization_url` e `exchange_verifier`. O aplicativo deve guardar o verificador localmente antes de abrir a URL. O callback GitHub entrega ao aplicativo um código de troca de uso único, sem o verificador no deep link. `POST /v1/auth/github/exchange` exige `code` e `exchange_verifier` e retorna access token de 15 minutos e refresh token rotativo de 30 dias. Apenas hashes dos tokens são persistidos.
+
+As rotas autenticadas expõem bootstrap, cadastro e consulta de repositórios, rotação do segredo, feed paginado, dispositivo, logout e exclusão da conta. Todas exigem `Authorization: Bearer <access_token>` e aplicam o workspace da sessão. Um recurso de outro workspace responde `404`.
+
 ## Testes
 
 Suíte rápida:
@@ -115,7 +129,7 @@ PIPEPULSE_INTEGRATION=1 go test ./internal/database ./internal/repository ./inte
 
 ## Estado da implementação
 
-Concluído até a Fase 3:
+Implementado até a Fase 4:
 
 - pool PostgreSQL com `pgxpool`
 - schema completo do MVP em migration Goose embutida
@@ -129,9 +143,14 @@ Concluído até a Fase 3:
 - limite de corpo de 1 MiB e validação dos headers GitHub
 - associação obrigatória da entrega com repositório e workflow ativos
 - processamento vertical da entrega até estado e feed de falhas
+- OAuth GitHub com PKCE S256 e `state` de uso único
+- workspace Free automático e sessões opacas rotativas
+- bootstrap com entitlements server-side
+- API de repositórios e workflow com limite Free transacional
+- feed de falhas paginado e isolado por workspace
+- registro de um dispositivo ativo, logout e exclusão da conta
 
 Ainda fora do escopo desta fase:
 
-- autenticação GitHub e isolamento HTTP por workspace
 - sender FCM e política de retry
 - aplicativo Flutter

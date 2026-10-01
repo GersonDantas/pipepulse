@@ -26,7 +26,7 @@ func (fakeService) Handle(context.Context, services.WebhookRequest) error {
 func TestSetupRouterHealthCheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := handlers.New(fakeService{}, repository.NewMemoryStateRepository(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	router := SetupRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	router := SetupRouter(handler, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -48,7 +48,7 @@ func TestSetupRouterEmitsJSONAccessLogs(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	handler := handlers.New(fakeService{}, repository.NewMemoryStateRepository(), logger)
-	router := SetupRouter(handler, logger)
+	router := SetupRouter(handler, nil, nil, logger)
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
