@@ -48,7 +48,7 @@ Estados permitidos:
 | 1 | Fundação Go | aprovada | `main` após merge | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | concluída |
 | 2 | PostgreSQL e persistência durável | aprovada | `main` após merge | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | concluída |
 | 3 | Webhook GitHub vertical | aprovada | `main` após merge | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | concluída |
-| 4 | Autenticação e API do produto | em revisão | `feat/mvp-auth-api` | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | revisão, testes e aprovação explícita do usuário |
+| 4 | Autenticação e API do produto | aprovada | `main` após merge | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | concluída |
 | 5 | FCM, outbox e retry | pendente | `feat/mvp-fcm` | não aberto | Fase 4 aprovada |
 | 6 | Aplicativo Flutter Android/iOS | pendente | `feat/mvp-flutter-app` | não aberto | Fases 4 e 5 aprovadas |
 | 7 | Operação privada e alpha | pendente | `chore/mvp-private-alpha-release` | não aberto | Fases 1 a 6 aprovadas |
@@ -67,7 +67,7 @@ Atualizar uma linha ao abrir, revisar, aprovar ou rejeitar cada PR. O relatório
 | 1 | [#2](https://github.com/GersonDantas/pipepulse/pull/2) | `feat/mvp-backend-foundation` | aprovada | 6 | `go test ./...`, `go test -race ./...` e `go vet ./...` verdes | aprovada explicitamente pelo usuário em 2026-07-22 | configuração, composição explícita, evento GitHub normalizado, fila drenável e logging estruturado incorporados à `main` |
 | 2 | [#3](https://github.com/GersonDantas/pipepulse/pull/3) | `feat/mvp-postgres` | aprovada | 4 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-08-18 | schema completo, transação atômica, recuperação, retenção e entitlements Free incorporados à `main` |
 | 3 | [#4](https://github.com/GersonDantas/pipepulse/pull/4) | `feat/mvp-github-webhook` | aprovada | 9 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-08-19 | endpoint seguro, associação persistente, busca indexada e fluxo até o feed incorporados à `main` |
-| 4 | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | `feat/mvp-auth-api` | em revisão | 4 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | pendente | OAuth GitHub com PKCE, sessões rotativas e API do produto entregues para revisão |
+| 4 | [#5](https://github.com/GersonDantas/pipepulse/pull/5) | `feat/mvp-auth-api` | aprovada | 5 | `go test ./...`, `go test -race ./...`, `go vet ./...`, `govulncheck ./...` e integração PostgreSQL verdes | aprovada explicitamente pelo usuário em 2026-10-01 | OAuth GitHub com PKCE, sessões rotativas e API do produto incorporados à `main` |
 
 Nenhuma linha pode ser marcada como `aprovada` sem a confirmação explícita do usuário. Quando um PR for reprovado ou exigir correções, manter o mesmo registro e anotar a nova rodada de testes.
 
