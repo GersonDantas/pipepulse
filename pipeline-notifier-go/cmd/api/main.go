@@ -12,6 +12,7 @@ import (
 	"pipeline-notifier/internal/config"
 	"pipeline-notifier/internal/database"
 	"pipeline-notifier/internal/handlers"
+	"pipeline-notifier/internal/notifications"
 	"pipeline-notifier/internal/processor"
 	"pipeline-notifier/internal/queue"
 	"pipeline-notifier/internal/repository"
@@ -51,6 +52,12 @@ func main() {
 		logger.Error("webhook secret encryption unavailable", "error", err)
 		os.Exit(1)
 	}
+	fcmSender, err := notifications.NewFirebase(configuration.FCMCredentialsJSON)
+	if err != nil {
+		logger.Error("FCM configuration invalid", "error", err)
+		os.Exit(1)
+	}
+	notificationsDone := notifications.NewWorker(store, fcmSender, secretBox, configuration.WorkerPollInterval, logger).Start(runtimeContext)
 	eventProcessor := processor.New(store, logger)
 	eventQueue := queue.New(store, configuration.WorkerPollInterval, logger)
 	eventQueue.Start(eventProcessor)
@@ -111,6 +118,12 @@ func main() {
 	case <-retentionDone:
 	case <-shutdownContext.Done():
 		logger.Error("retention worker shutdown failed", "error", shutdownContext.Err())
+		os.Exit(1)
+	}
+	select {
+	case <-notificationsDone:
+	case <-shutdownContext.Done():
+		logger.Error("notification worker shutdown failed")
 		os.Exit(1)
 	}
 	if !shutdownRequested {

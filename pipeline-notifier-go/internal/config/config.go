@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -26,6 +27,7 @@ type Config struct {
 	Port                   string
 	DatabaseURL            string
 	DataEncryptionKey      []byte
+	FCMCredentialsJSON     []byte
 	AppBaseURL             string
 	GithubClientID         string
 	GithubClientSecret     string
@@ -65,6 +67,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	fcmValue, err := requiredEnv("FCM_CREDENTIALS_JSON_B64")
+	if err != nil {
+		return Config{}, err
+	}
+	fcmCredentials, err := base64.StdEncoding.DecodeString(fcmValue)
+	if err != nil || !json.Valid(fcmCredentials) {
+		return Config{}, fmt.Errorf("FCM_CREDENTIALS_JSON_B64 must be base64-encoded JSON")
+	}
 
 	logLevel, err := parseLogLevel(envOrDefault("LOG_LEVEL", defaultLogLevel))
 	if err != nil {
@@ -100,6 +110,7 @@ func Load() (Config, error) {
 		Port:                   envOrDefault("PORT", defaultPort),
 		DatabaseURL:            databaseURL,
 		DataEncryptionKey:      dataEncryptionKey,
+		FCMCredentialsJSON:     fcmCredentials,
 		AppBaseURL:             strings.TrimRight(appBaseURL, "/"),
 		GithubClientID:         githubClientID,
 		GithubClientSecret:     githubClientSecret,

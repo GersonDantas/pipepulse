@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,6 +20,19 @@ func setRequiredEnvironment(t *testing.T) {
 	t.Setenv("GITHUB_CLIENT_ID", "client-id")
 	t.Setenv("GITHUB_CLIENT_SECRET", "client-secret")
 	t.Setenv("MOBILE_OAUTH_REDIRECT_URI", "com.pipepulse.app://oauth")
+	t.Setenv("FCM_CREDENTIALS_JSON_B64", base64.StdEncoding.EncodeToString([]byte(`{"type":"service_account"}`)))
+}
+
+func TestLoadRequiresFCMCredentials(t *testing.T) {
+	for _, value := range []string{"", "not-base64", base64.StdEncoding.EncodeToString([]byte("not-json"))} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv("FCM_CREDENTIALS_JSON_B64", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "FCM_CREDENTIALS_JSON_B64") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
 }
 
 func TestLoadUsesEnvironmentAndDefaults(t *testing.T) {
