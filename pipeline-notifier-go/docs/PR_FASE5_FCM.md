@@ -4,7 +4,7 @@
 
 Uma falha já persistida pelo processor passa a ser enviada pelo sender Firebase HTTP v1. A entrega permanece durável antes do HTTP, com tentativas limitadas, recuperação após reinício e conclusão protegida contra workers obsoletos.
 
-Branch: `feat/mvp-fcm`, criada de `main` em `d2a2ff7`. A Fase 4 consta como aprovada no plano central. A implementação local está pronta para revisão; a publicação do PR depende da confirmação de escrita externa. A fase não está aprovada e a Fase 6 não foi iniciada.
+Branch: `feat/mvp-fcm`, criada de `main` em `d2a2ff7`. A Fase 4 consta como aprovada no plano central. Publicação autorizada pelo usuário. [PR #6](https://github.com/GersonDantas/pipepulse/pull/6) aberto como draft para revisão e testes. A fase não está aprovada e a Fase 6 não foi iniciada.
 
 ## Escopo incluído
 
@@ -31,9 +31,9 @@ Branch: `feat/mvp-fcm`, criada de `main` em `d2a2ff7`. A Fase 4 consta como apro
 | Hash ou referência | Mensagem | Responsabilidade |
 | --- | --- | --- |
 | `4852bb0` | `feat(notifications): send durable FCM failure alerts` | sender, worker, persistência, composição, configuração e testes |
-| `feat/mvp-fcm` após o commit documental | `docs: document FCM phase validation and acceptance` | README, registro central e este relatório |
+| `3b2a1c2` | `docs: document FCM phase validation and acceptance` | README, registro central e este relatório |
 
-O hash exato do commit documental deve ser incluído no corpo do PR ao publicar. O histórico completo pode ser verificado com `git log --oneline origin/main..feat/mvp-fcm`.
+O commit que registra a abertura do PR é documental e consta no histórico da branch. O histórico completo pode ser verificado com `git log --oneline origin/main..feat/mvp-fcm`.
 
 ## Mudanças por comportamento
 
@@ -240,5 +240,5 @@ Rollback: restaurar o binário da Fase 4. Ele continua persistindo a outbox, mas
 - [ ] Push Firebase real validado.
 - [ ] Recebimento físico e comportamento offline registrados.
 - [ ] Decisão explícita sobre o aceite de entrega remota.
-- [ ] Publicação da branch e abertura do PR autorizadas.
+- [x] Publicação da branch e abertura do PR autorizadas; PR #6 aberto como draft.
 - [ ] PR revisado e Fase 5 aprovada pelo usuário.
